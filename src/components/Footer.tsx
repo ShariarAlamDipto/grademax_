@@ -1,0 +1,147 @@
+import Link from 'next/link'
+import type { CSSProperties } from 'react'
+import { SOCIAL_PROFILES, SocialIcon } from '@/lib/social'
+
+export default function Footer() {
+  return (
+    <footer
+      aria-label="Site footer"
+      style={{ background: "var(--gm-surface)", borderTop: "1px solid var(--gm-border)", color: "var(--gm-text-2)" }}
+    >
+      <div style={{ maxWidth: "1080px", margin: "0 auto", padding: "3.5rem 1.5rem 2rem" }}>
+
+        {/* Link grid */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+            gap: "2rem",
+            marginBottom: "2.5rem",
+          }}
+        >
+          {/* Brand */}
+          <div>
+            <p style={{ fontWeight: 800, fontSize: "1.1rem", color: "var(--gm-text)", marginBottom: "0.75rem" }}>
+              Grade<span style={{ color: "#F59E0B" }}>Max</span>
+            </p>
+            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+              {([
+                ["/about",                  "About Us"],
+                ["/contact",                "Contact"],
+                ["/edexcel-past-papers",    "Edexcel Past Papers"],
+                // Head-term landing; the by-year catalog stays linked under Features.
+                ["/cambridge-past-papers",  "Cambridge Past Papers"],
+                ["/edexcel-worksheets",     "Worksheet Generator"],
+              ] as [string, string][]).map(([href, label]) => (
+                <li key={href}><Link href={href} className="gm-link" style={{ fontSize: "0.8rem" }}>{label}</Link></li>
+              ))}
+            </ul>
+          </div>
+
+          {/* IGCSE */}
+          <div>
+            <p style={{ fontWeight: 700, fontSize: "0.8rem", color: "var(--gm-text)", marginBottom: "0.875rem", letterSpacing: "0.04em" }}>
+              IGCSE Past Papers
+            </p>
+            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+              {([
+                ["/subjects/igcse/physics",   "Physics (4PH1)"],
+                ["/subjects/igcse/maths-a",   "Maths A (4MA1)"],
+                ["/subjects/igcse/maths-b",   "Maths B (4MB1)"],
+                ["/subjects/igcse/chemistry", "Chemistry (4CH1)"],
+                ["/subjects/igcse/biology",   "Biology (4BI1)"],
+                ["/subjects/igcse/ict",       "ICT (4IT1)"],
+              ] as [string, string][]).map(([href, label]) => (
+                <li key={href}><Link href={href} className="gm-link" style={{ fontSize: "0.8rem" }}>{label}</Link></li>
+              ))}
+              <li style={{ marginTop: "0.25rem" }}>
+                <Link href="/edexcel-igcse-past-papers" style={{ color: "#6EA8FE", fontSize: "0.75rem", textDecoration: "none" }}>
+                  View all IGCSE →
+                </Link>
+              </li>
+            </ul>
+          </div>
+
+          {/* A Level */}
+          <div>
+            <p style={{ fontWeight: 700, fontSize: "0.8rem", color: "var(--gm-text)", marginBottom: "0.875rem", letterSpacing: "0.04em" }}>
+              A Level Past Papers
+            </p>
+            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+              {([
+                ["/subjects/ial/pure-mathematics-1","Pure Maths 1 (WMA11)"],
+                ["/subjects/ial/mechanics-1",       "Mechanics 1 (WME01)"],
+                ["/subjects/ial/statistics-1",      "Statistics 1 (WST01)"],
+              ] as [string, string][]).map(([href, label]) => (
+                <li key={href}><Link href={href} className="gm-link" style={{ fontSize: "0.8rem" }}>{label}</Link></li>
+              ))}
+              <li style={{ marginTop: "0.25rem" }}>
+                <Link href="/edexcel-a-level-past-papers" style={{ color: "#A78BFA", fontSize: "0.75rem", textDecoration: "none" }}>
+                  View all A Level →
+                </Link>
+              </li>
+            </ul>
+          </div>
+
+          {/* Features */}
+          <div>
+            <p style={{ fontWeight: 700, fontSize: "0.8rem", color: "var(--gm-text)", marginBottom: "0.875rem", letterSpacing: "0.04em" }}>
+              Features
+            </p>
+            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+              {([
+                // Public landing (indexable) rather than the auth-walled /generate tool.
+                ["/edexcel-worksheets",    "Worksheet Generator"],
+                ["/test-builder",          "Test Builder"],
+                ["/past-papers",           "Edexcel Papers by Year"],
+                ["/past-papers/cambridge", "Cambridge Papers by Year"],
+                ["/subjects",              "All Subjects"],
+              ] as [string, string][]).map(([href, label]) => (
+                <li key={href}><Link href={href} className="gm-link" style={{ fontSize: "0.8rem" }}>{label}</Link></li>
+              ))}
+            </ul>
+          </div>
+
+          {/* Legal */}
+          <div>
+            <p style={{ fontWeight: 700, fontSize: "0.8rem", color: "var(--gm-text)", marginBottom: "0.875rem", letterSpacing: "0.04em" }}>
+              Legal
+            </p>
+            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+              {([
+                ["/privacy","Privacy Policy"],
+                ["/terms",  "Terms of Service"],
+              ] as [string, string][]).map(([href, label]) => (
+                <li key={href}><Link href={href} className="gm-link" style={{ fontSize: "0.8rem" }}>{label}</Link></li>
+              ))}
+            </ul>
+          </div>
+        </div>
+
+        {/* Bottom bar */}
+        <div style={{ borderTop: "1px solid var(--gm-border)", paddingTop: "1.25rem", textAlign: "center" }}>
+          <div style={{ display: "flex", justifyContent: "center", gap: "0.75rem", marginBottom: "0.875rem" }}>
+            {SOCIAL_PROFILES.map((p) => (
+              <a
+                key={p.id}
+                href={p.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="gm-social-icon"
+                aria-label={`GradeMax on ${p.name}`}
+                title={`${p.cta} on ${p.name}`}
+                style={{ "--gm-social-accent": p.color } as CSSProperties}
+              >
+                <SocialIcon id={p.id} size={16} />
+              </a>
+            ))}
+          </div>
+          <p style={{ fontSize: "0.78rem", color: "var(--gm-text-3)" }}>
+            © {new Date().getFullYear()} GradeMax. All rights reserved.
+          </p>
+        </div>
+
+      </div>
+    </footer>
+  )
+}

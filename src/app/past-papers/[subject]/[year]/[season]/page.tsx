@@ -1,0 +1,398 @@
+import Link from "next/link"
+import { notFound } from "next/navigation"
+import { getSubjectBySlug, subjectColorClasses, seasonDisplay, boardOf, boardDisplay, levelShort, catalogHref } from "@/lib/subjects"
+import { seoSubjects, isSingleUnitEdexcelCode } from "@/lib/seo-subjects"
+import { toPaperSlug, formatPaperLabel, formatCambridgePaperLabel, cambridgePaperCode } from "@/lib/paper-slugs"
+import { getPapersIndex, sessionKey } from "@/lib/papersIndex"
+import PaperRow from "@/components/past-papers/PaperRow"
+
+export const revalidate = false
+// Edexcel session URLs are enumerated from the DB-backed index at build time.
+// Cambridge sessions render on demand and cache permanently (revalidate=false)
+// — prerendering all ~10k Cambridge routes pushed the deploy output past
+// Vercel's limit (post-build "Maximum call stack size exceeded"). Invalid URLs
+// still 404 via the guards below.
+export const dynamicParams = true
+// First on-demand render loads the whole papers index from Supabase — give it
+// headroom beyond Vercel's default function timeout.
+export const maxDuration = 60
+
+export async function generateStaticParams() {
+  const { bySession } = await getPapersIndex()
+  const params: { subject: string; year: string; season: string }[] = []
+  for (const key of bySession.keys()) {
+    const [subject, year, season] = key.split("/")
+    if (!subject || !year || !season) continue
+    const subj = getSubjectBySlug(subject)
+    if (!subj || boardOf(subj.level) === "cambridge") continue
+    params.push({ subject, year, season })
+  }
+  return params
+}
+
+interface PaperRow {
+  id: string
+  paper_number: string
+  pdf_url: string | null
+  markscheme_pdf_url: string | null
+}
+
+const VALID_SEASONS = new Set(["jan", "jan-feb", "feb-mar", "may-jun", "oct-nov"])
+
+// Cambridge series shorthand (m/s/w) — "0620 s23" is how CAIE students search.
+const CAMBRIDGE_SERIES_LETTER: Record<string, string> = {
+  "feb-mar": "m",
+  "may-jun": "s",
+  "oct-nov": "w",
+}
+
+function parseYearParam(value: string): number | null {
+  if (!/^\d{4}$/.test(value)) return null
+  const year = Number.parseInt(value, 10)
+  if (year < 2000 || year > 2100) return null
+  return year
+}
+
+function normalizeSeason(value: string): string {
+  return value.trim().toLowerCase()
+}
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ subject: string; year: string; season: string }>
+}) {
+  const { subject: slug, year, season } = await params
+  const subj = getSubjectBySlug(slug)
+  if (!subj) return {}
+
+  const parsedYear = parseYearParam(year)
+  if (parsedYear === null) return {}
+  const yearLabel = String(parsedYear)
+  const normalizedSeason = normalizeSeason(season)
+  if (!VALID_SEASONS.has(normalizedSeason)) return {}
+
+  const level = levelShort(subj.level)
+  const board = boardDisplay(subj.level)
+  const boardLong = boardOf(subj.level) === "cambridge" ? "Cambridge International" : "Pearson Edexcel"
+  const seasonName = seasonDisplay(normalizedSeason)
+  const seoData = seoSubjects.find((s) => s.slug === slug)
+  const examCode = seoData?.examCode ?? subj.examCode ?? ""
+  const codeStr = examCode ? ` (${examCode})` : ""
+  const codeLed = isSingleUnitEdexcelCode(examCode) && !subj.name.startsWith("IAL ")
+  const isCambridge = boardOf(subj.level) === "cambridge"
+  // Lead with code + year + session for queries like "4ma1/1hr may 2025". The
+  // /past-papers layout's plain-string title blocks the root template here, so the
+  // brand suffix is added explicitly. Cambridge: winning SERP titles put the name
+  // immediately before the syllabus code ("Chemistry 0620") plus the session.
+  const title = codeLed
+    ? `${examCode} ${yearLabel} ${seasonName} Past Paper + Mark Scheme – Edexcel ${subj.name}`
+    : isCambridge && examCode
+    ? `${subj.name} ${examCode} ${seasonName} ${yearLabel} Past Papers – Cambridge ${level} QP & MS`
+    : `${board} ${level} ${subj.name}${codeStr} ${yearLabel} ${seasonName} Past Papers – Free PDF`
+
+  return {
+    title: `${title} | GradeMax`,
+    description: `Download free ${board} ${level} ${subj.name}${codeStr} ${yearLabel} ${seasonName} past papers with mark schemes. Official ${boardLong} question papers and mark schemes available as free PDF.`,
+    keywords: [
+      `${subj.name} ${yearLabel} ${seasonName} past paper`,
+      `${board} ${level} ${subj.name} ${yearLabel} ${seasonName}`,
+      `${subj.name} ${yearLabel} ${seasonName} mark scheme`,
+      `${subj.name} past papers ${yearLabel}`,
+      ...(examCode
+        ? [
+            `${examCode} ${yearLabel} ${seasonName} past paper`,
+            `${examCode} ${yearLabel} past paper`,
+            `${examCode} mark scheme ${yearLabel}`,
+            `${examCode} past papers`,
+          ]
+        : []),
+      // Cambridge series shorthand students type verbatim: "0620 s23" = May/June 2023.
+      ...(isCambridge && examCode && CAMBRIDGE_SERIES_LETTER[normalizedSeason]
+        ? [
+            `${subj.name} ${examCode} ${seasonName} ${yearLabel}`,
+            `${examCode} ${CAMBRIDGE_SERIES_LETTER[normalizedSeason]}${yearLabel.slice(2)}`,
+            `CAIE ${subj.name} ${yearLabel} ${seasonName}`,
+          ]
+        : []),
+      `${subj.name} ${yearLabel} paper 1`,
+      `${subj.name} ${yearLabel} paper 2`,
+      `${board} ${subj.name} ${yearLabel} free download`,
+      `${subj.name} ${yearLabel} past paper PDF`,
+      `${board} ${level} ${subj.name} ${yearLabel}`,
+      `${level} ${subj.name} ${yearLabel} ${seasonName}`,
+    ],
+    openGraph: {
+      title: `${title} | GradeMax`,
+      description: `Free ${board} ${level} ${subj.name} ${yearLabel} ${seasonName} past papers with mark schemes. Download question papers and answer booklets as PDF.`,
+      url: `https://www.grademax.me/past-papers/${slug}/${yearLabel}/${normalizedSeason}`,
+      siteName: "GradeMax",
+      type: "website",
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: `${level} ${subj.name}${codeStr} ${yearLabel} ${seasonName} Past Papers | GradeMax`,
+      description: `Free ${board} ${level} ${subj.name} ${yearLabel} ${seasonName} papers with mark schemes.`,
+    },
+    alternates: {
+      canonical: `https://www.grademax.me/past-papers/${slug}/${yearLabel}/${normalizedSeason}`,
+    },
+  }
+}
+
+function buildJsonLd(
+  slug: string,
+  subjectName: string,
+  level: string,
+  board: string,
+  catalogPath: string,
+  year: string,
+  seasonSlug: string,
+  seasonName: string,
+  papers: PaperRow[],
+  examCode: string
+) {
+  const base = "https://www.grademax.me"
+  const pageUrl = `${base}/past-papers/${slug}/${year}/${seasonSlug}`
+
+  return {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "LearningResource",
+        "@id": `${pageUrl}#resource`,
+        name: `${board} ${level} ${subjectName} ${year} ${seasonName} Past Papers`,
+        description: `Free ${board} ${level} ${subjectName} ${year} ${seasonName} question papers and mark schemes.`,
+        url: pageUrl,
+        educationalLevel: level,
+        learningResourceType: ["Past Paper", "Examination"],
+        provider: {
+          "@type": "Organization",
+          name: "GradeMax",
+          url: base,
+        },
+        isAccessibleForFree: true,
+        inLanguage: "en-GB",
+        datePublished: `${year}-01-01`,
+        alternativeHeadline: examCode ? `${examCode} ${year} ${seasonName}` : undefined,
+        audience: {
+          "@type": "EducationalAudience",
+          educationalRole: "student",
+          audienceType: `${level} students`,
+        },
+        offers: {
+          "@type": "Offer",
+          price: "0",
+          priceCurrency: "USD",
+          availability: "https://schema.org/InStock",
+        },
+        about: examCode
+          ? {
+              "@type": "Thing",
+              name: `${board} ${level} ${subjectName} (${examCode})`,
+              identifier: examCode,
+            }
+          : undefined,
+        educationalAlignment: {
+          "@type": "AlignmentObject",
+          alignmentType: "educationalSubject",
+          targetName: subjectName,
+          educationalFramework: board,
+        },
+        hasPart: [
+          ...papers
+            .filter((p) => p.pdf_url)
+            .map((p) => ({
+              "@type": "MediaObject",
+              name: `${subjectName} ${year} ${seasonName} Paper ${p.paper_number} Question Paper`,
+              encodingFormat: "application/pdf",
+              contentUrl: p.pdf_url,
+            })),
+          ...papers
+            .filter((p) => p.markscheme_pdf_url)
+            .map((p) => ({
+              "@type": "MediaObject",
+              name: `${subjectName} ${year} ${seasonName} Paper ${p.paper_number} Mark Scheme`,
+              encodingFormat: "application/pdf",
+              contentUrl: p.markscheme_pdf_url,
+            })),
+        ],
+      },
+      {
+        "@type": "BreadcrumbList",
+        itemListElement: [
+          { "@type": "ListItem", position: 1, name: "Home", item: base },
+          { "@type": "ListItem", position: 2, name: `${board} Past Papers`, item: `${base}${catalogPath}` },
+          { "@type": "ListItem", position: 3, name: subjectName, item: `${base}/past-papers/${slug}` },
+          { "@type": "ListItem", position: 4, name: `${year} ${seasonName}`, item: pageUrl },
+        ],
+      },
+    ],
+  }
+}
+
+function serializeJsonLd(schema: object): string {
+  return JSON.stringify(schema).replace(/</g, "\\u003c")
+}
+
+export default async function SessionPapersPage({
+  params,
+}: {
+  params: Promise<{ subject: string; year: string; season: string }>
+}) {
+  const { subject: slug, year, season } = await params
+  const subj = getSubjectBySlug(slug)
+  if (!subj) notFound()
+
+  const parsedYear = parseYearParam(year)
+  if (parsedYear === null) notFound()
+  const yearLabel = String(parsedYear)
+
+  const seoData = seoSubjects.find((s) => s.slug === slug)
+  const examCode = seoData?.examCode ?? subj.examCode ?? ""
+  const level = levelShort(subj.level)
+  const board = boardDisplay(subj.level)
+  const boardLong = boardOf(subj.level) === "cambridge" ? "Cambridge International" : "Pearson Edexcel"
+  const catalogPath = catalogHref(subj.level)
+  const isCambridge = boardOf(subj.level) === "cambridge"
+  const colorClass = subjectColorClasses[subj.colorKey]
+  const normalizedSeason = normalizeSeason(season)
+  if (!VALID_SEASONS.has(normalizedSeason)) notFound()
+  const seasonName = seasonDisplay(normalizedSeason)
+
+  // Look up the session's papers from the memoized build-time index — avoids
+  // per-page Supabase queries and the ISR writes from cold cache fills.
+  const { bySession } = await getPapersIndex()
+  const indexed = bySession.get(sessionKey(slug, yearLabel, normalizedSeason))
+  if (!indexed || indexed.length === 0) notFound()
+  const papers: PaperRow[] = indexed.map((p) => ({
+    id: p.id,
+    paper_number: p.paperNumber,
+    pdf_url: p.pdfUrl,
+    markscheme_pdf_url: p.markschemePdfUrl,
+  }))
+
+  const jsonLd = buildJsonLd(slug, subj.name, level, board, catalogPath, yearLabel, normalizedSeason, seasonName, papers, examCode)
+
+  return (
+    <>
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: serializeJsonLd(jsonLd) }} />
+
+      <main className="min-h-screen bg-black text-white">
+        <div className="border-b border-white/10 bg-black/50 backdrop-blur-sm sticky z-10" style={{ top: "var(--gm-nav-h)" }}>
+          <div className="max-w-4xl mx-auto px-6 py-3 flex items-center gap-2 text-sm flex-wrap">
+            <Link href={catalogPath} className="text-white/50 hover:text-white transition-colors">Past Papers</Link>
+            <span className="text-white/20">›</span>
+            <Link href={`/past-papers/${slug}`} className="text-white/50 hover:text-white transition-colors">{subj.name}</Link>
+            <span className="text-white/20">›</span>
+            <span className="text-white font-medium">{yearLabel} {seasonName}</span>
+          </div>
+        </div>
+
+        <div className="max-w-4xl mx-auto px-6 py-10">
+          <div className="mb-8">
+            <div className="flex items-center gap-3 mb-3">
+              <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${colorClass}`}>{board} {level}</span>
+              <span className="text-white/30 text-sm">{yearLabel} · {seasonName}</span>
+            </div>
+            <h1 className="text-3xl font-extrabold mb-2">{subj.name} {yearLabel} {seasonName}</h1>
+            <p className="text-white/50">
+              Download free {board} {level} {subj.name} {yearLabel} {seasonName} question papers and mark schemes.
+            </p>
+          </div>
+
+          <div>
+            {papers.map((paper) => {
+              const paperSlug = toPaperSlug(paper.paper_number)
+              const paperLabel = isCambridge ? formatCambridgePaperLabel(paper.paper_number) : formatPaperLabel(paper.paper_number)
+              const paperCode = isCambridge ? cambridgePaperCode(subj.examCode, paper.paper_number) : ""
+              return (
+                <PaperRow
+                  key={paper.id}
+                  id={`paper-${paper.paper_number.toLowerCase()}`}
+                  href={paperSlug ? `/past-papers/${slug}/${yearLabel}/${normalizedSeason}/${paperSlug}` : null}
+                  label={paperLabel}
+                  code={paperCode}
+                  qpUrl={paper.pdf_url}
+                  msUrl={paper.markscheme_pdf_url}
+                  viewerTitle={`${subj.name} ${yearLabel} ${seasonName} ${paperLabel}`}
+                  backPath={`/past-papers/${slug}/${yearLabel}/${normalizedSeason}`}
+                />
+              )
+            })}
+          </div>
+
+          {seoData && (
+            <div className="mt-12 space-y-8">
+              <div className="pt-6 border-t border-white/10">
+                <h2 className="text-lg font-bold mb-3">About Edexcel {level} {subj.name} {yearLabel} {seasonName} Past Papers</h2>
+                <p className="text-white/60 text-sm leading-relaxed mb-2">
+                  This page provides free access to the official Pearson Edexcel {level} {subj.name}{examCode ? ` (${examCode})` : ""} {yearLabel} {seasonName} past papers with mark schemes.
+                  These past papers are the most effective revision resource for students preparing for their {level} {subj.name} examinations.
+                </p>
+                <p className="text-white/50 text-sm leading-relaxed">
+                  {seoData.shortDescription} The {yearLabel} {seasonName} papers cover all {seoData.topics.length} topic areas of the specification.
+                </p>
+              </div>
+
+              <div>
+                <h2 className="text-base font-bold mb-3 text-white/80">Topics in Edexcel {level} {subj.name}</h2>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {seoData.topics.map((topic) => (
+                    <div key={topic.slug} className="bg-white/[0.03] border border-white/10 rounded-lg px-4 py-2.5">
+                      <p className="text-sm font-semibold text-white/80">{topic.name}</p>
+                      <p className="text-xs text-white/40 mt-0.5 leading-snug">{topic.description}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <h2 className="text-base font-bold mb-3 text-white/80">How to Revise with Past Papers</h2>
+                <ol className="space-y-1.5 text-sm text-white/55 list-decimal list-inside leading-relaxed">
+                  <li>Download the Question Paper and attempt it under timed, exam conditions.</li>
+                  <li>Mark your answers using the official Mark Scheme — note where marks were lost.</li>
+                  <li>Identify weak topics and revisit those sections before trying another paper.</li>
+                  <li>Use GradeMax topic-wise questions to drill specific areas until confident.</li>
+                </ol>
+              </div>
+
+              {/* Other years — filtered against the index so we only link to
+                  sessions that actually exist (avoids soft-404s for Googlebot). */}
+              <div>
+                <h2 className="text-base font-bold mb-3 text-white/80">Other {subj.name} Past Papers</h2>
+                <div className="flex flex-wrap gap-2">
+                  {seoData.yearsAvailable
+                    .filter((y) => y !== parsedYear)
+                    .filter((y) => bySession.has(sessionKey(slug, y, normalizedSeason)))
+                    .slice(-6)
+                    .map((y) => (
+                      <Link
+                        key={y}
+                        href={`/past-papers/${slug}/${y}/${normalizedSeason}`}
+                        className="text-xs px-3 py-1.5 rounded-full border border-white/15 text-white/50 hover:text-white hover:border-white/30 transition-colors"
+                      >
+                        {subj.name} {y} {seasonName}
+                      </Link>
+                    ))}
+                  <Link
+                    href={`/past-papers/${slug}`}
+                    className="text-xs px-3 py-1.5 rounded-full border border-white/15 text-white/50 hover:text-white hover:border-white/30 transition-colors"
+                  >
+                    All {subj.name} Papers →
+                  </Link>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="mt-10 pt-6 border-t border-white/10">
+            <Link href={`/past-papers/${slug}`} className="text-sm text-white/50 hover:text-white transition-colors">
+              ← All {subj.name} Past Papers
+            </Link>
+          </div>
+        </div>
+      </main>
+    </>
+  )
+}

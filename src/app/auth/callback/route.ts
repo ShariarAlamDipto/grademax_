@@ -1,0 +1,72 @@
+import { type NextRequest, NextResponse } from "next/server"
+import { createServerClient } from "@supabase/ssr"
+import { getSupabaseAdmin } from "@/lib/supabaseAdmin"
+import { safeNextPath } from "@/lib/safeRedirect"
+
+export const runtime = "nodejs"
+export const dynamic = "force-dynamic"
+
+export async function GET(request: NextRequest) {
+  const url = new URL(request.url)
+  const code = url.searchParams.get("code")
+  // Same-site relative paths only — blocks open-redirect via ?next=//evil.com
+  const next = safeNextPath(url.searchParams.get("next"))
+
+  const redirectTo = new URL(next, url.origin)
+
+  if (code) {
+    const response = NextResponse.redirect(redirectTo)
+
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() {
+            return request.cookies.getAll()
+          },
+          setAll(cookiesToSet) {
+            cookiesToSet.forEach(({ name, value, options }) => {
+              response.cookies.set(name, value, options)
+            })
+          },
+        },
+      }
+    )
+
+    const { error } = await supabase.auth.exchangeCodeForSession(code)
+    if (!error) {
+      // Ensure a profiles row exists for new users (Google OAuth creates
+      // auth.users but nothing auto-creates the public.profiles row)
+      try {
+        const { data: { user: authUser } } = await supabase.auth.getUser()
+        if (authUser) {
+          const db = getSupabaseAdmin() || supabase
+          await db.from("profiles").upsert(
+            {
+              id: authUser.id,
+              email: authUser.email ?? null,
+              full_name:
+                (authUser.user_metadata?.full_name as string) ||
+                (authUser.user_metadata?.name as string) ||
+                null,
+              avatar_url: (authUser.user_metadata?.avatar_url as string) || null,
+              role: "student",
+            },
+            { onConflict: "id", ignoreDuplicates: true }
+          )
+        }
+      } catch {
+        // Non-fatal — profile can be created later via profile page
+      }
+
+      return response
+    }
+
+    return NextResponse.redirect(
+      new URL(`/login?error=${encodeURIComponent(error.message)}`, url.origin)
+    )
+  }
+
+  return NextResponse.redirect(redirectTo)
+}

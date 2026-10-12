@@ -1,0 +1,381 @@
+import { createClient } from "@supabase/supabase-js"
+import type { Metadata } from "next"
+import Link from "next/link"
+import { notFound } from "next/navigation"
+import { getSubjectBySlug, seasonDisplay, subjectColorClasses, boardOf, boardDisplay, levelShort, catalogHref, dbNameOf } from "@/lib/subjects"
+import { seoSubjects, isSingleUnitEdexcelCode } from "@/lib/seo-subjects"
+import { toPaperSlug, formatPaperLabel, formatCambridgePaperLabel, cambridgePaperCode, comparePaperNumbers } from "@/lib/paper-slugs"
+import { getPapersIndex } from "@/lib/papersIndex"
+import PaperRow from "@/components/past-papers/PaperRow"
+
+export const revalidate = false
+// Edexcel year params are enumerated from the DB-backed index so we cover every
+// year that actually has papers. Cambridge pages are NOT prerendered — they
+// render on demand and cache permanently (revalidate=false), because
+// prerendering all ~10k Cambridge routes pushed the deploy output past Vercel's
+// limit (post-build "Maximum call stack size exceeded"). dynamicParams must be
+// true for that fall-through; invalid URLs still 404 via the guards below.
+export const dynamicParams = true
+// First on-demand render loads the whole papers index from Supabase — give it
+// headroom beyond Vercel's default function timeout.
+export const maxDuration = 60
+
+function parseYearParam(value: string): number | null {
+  if (!/^\d{4}$/.test(value)) return null
+  const year = Number.parseInt(value, 10)
+  if (year < 2000 || year > 2100) return null
+  return year
+}
+
+export async function generateStaticParams() {
+  const { yearsBySubject } = await getPapersIndex()
+  const params: { subject: string; year: string }[] = []
+  for (const [subject, years] of yearsBySubject) {
+    const subj = getSubjectBySlug(subject)
+    if (!subj || boardOf(subj.level) === "cambridge") continue
+    for (const y of years) params.push({ subject, year: String(y) })
+  }
+  return params
+}
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ subject: string; year: string }>
+}): Promise<Metadata> {
+  const { subject: slug, year } = await params
+  const subj = getSubjectBySlug(slug)
+  if (!subj) return {}
+  const parsedYear = parseYearParam(year)
+  if (parsedYear === null) return {}
+  const yearLabel = String(parsedYear)
+
+  const level = levelShort(subj.level)
+  const board = boardDisplay(subj.level)
+  const seoData = seoSubjects.find((s) => s.slug === slug)
+  const examCode = seoData?.examCode ?? subj.examCode ?? ""
+  const codeStr = examCode ? ` (${examCode})` : ""
+  const codeLed = isSingleUnitEdexcelCode(examCode) && !subj.name.startsWith("IAL ")
+  // Lead with code + year for queries like "4ph1 2023 past papers" — same pattern
+  // as the session/paper pages. /past-papers layout blocks the root template, so
+  // the brand suffix stays explicit.
+  const title = codeLed
+    ? `${examCode} ${yearLabel} Past Papers – Edexcel ${level} ${subj.name} by Session`
+    : `${board} ${level} ${subj.name}${codeStr} ${yearLabel} Past Papers by Session – Free PDF`
+
+  return {
+    title: `${title} | GradeMax`,
+    description:
+      `Download free ${board} ${level} ${subj.name}${codeStr} ${yearLabel} past papers and mark schemes. ` +
+      "Browse all available sessions and access official question papers as PDF.",
+    openGraph: {
+      title: `${board} ${level} ${subj.name}${codeStr} ${yearLabel} Past Papers | GradeMax`,
+      description: `Free ${board} ${level} ${subj.name} ${yearLabel} past papers by session with mark schemes.`,
+      url: `https://www.grademax.me/past-papers/${slug}/${yearLabel}`,
+      siteName: "GradeMax",
+      type: "website",
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: `${level} ${subj.name}${codeStr} ${yearLabel} Past Papers | GradeMax`,
+      description: `Free ${board} ${level} ${subj.name} ${yearLabel} papers by session.`,
+    },
+    alternates: {
+      canonical: `https://www.grademax.me/past-papers/${slug}/${yearLabel}`,
+    },
+  }
+}
+
+interface PaperRow {
+  id: string
+  paper_number: string
+  season: string
+  pdf_url: string | null
+  markscheme_pdf_url: string | null
+}
+
+interface SessionGroup {
+  season: string
+  displaySeason: string
+  papers: PaperRow[]
+}
+
+const VALID_SEASONS = new Set(["jan", "jan-feb", "feb-mar", "may-jun", "oct-nov"])
+const SEASON_ORDER: Record<string, number> = {
+  jan: 0,
+  "jan-feb": 0,
+  "feb-mar": 1,
+  "may-jun": 2,
+  "oct-nov": 3,
+}
+
+function normalizeSeason(value: string): string {
+  return value.trim().toLowerCase()
+}
+
+function isValidPublicUrl(url: string | null): url is string {
+  if (!url) return false
+  return /^https?:\/\//i.test(url)
+}
+
+function dedupeSessionPapers(sessionPapers: PaperRow[]): PaperRow[] {
+  const byPaperNumber = new Map<string, PaperRow>()
+
+  for (const paper of sessionPapers) {
+    const existing = byPaperNumber.get(paper.paper_number)
+    if (!existing) {
+      byPaperNumber.set(paper.paper_number, paper)
+      continue
+    }
+
+    const existingScore = Number(Boolean(existing.pdf_url)) + Number(Boolean(existing.markscheme_pdf_url))
+    const paperScore = Number(Boolean(paper.pdf_url)) + Number(Boolean(paper.markscheme_pdf_url))
+
+    if (paperScore > existingScore || (paperScore === existingScore && paper.id > existing.id)) {
+      byPaperNumber.set(paper.paper_number, paper)
+    }
+  }
+
+  return Array.from(byPaperNumber.values()).sort((a, b) => comparePaperNumbers(a.paper_number, b.paper_number))
+}
+
+function buildJsonLd(slug: string, subjectName: string, level: string, board: string, catalogPath: string, year: string, sessions: SessionGroup[]) {
+  const base = "https://www.grademax.me"
+  const pageUrl = `${base}/past-papers/${slug}/${year}`
+
+  return {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "LearningResource",
+        "@id": `${pageUrl}#resource`,
+        name: `${board} ${level} ${subjectName} ${year} Past Papers`,
+        description: `Free ${board} ${level} ${subjectName} ${year} past papers organised by session.`,
+        url: pageUrl,
+        educationalLevel: level,
+        learningResourceType: ["Past Paper", "Examination"],
+        provider: {
+          "@type": "Organization",
+          name: "GradeMax",
+          url: base,
+        },
+        isAccessibleForFree: true,
+        inLanguage: "en-GB",
+      },
+      {
+        "@type": "ItemList",
+        name: `${subjectName} ${year} Sessions`,
+        numberOfItems: sessions.length,
+        itemListElement: sessions.map((session, index) => ({
+          "@type": "ListItem",
+          position: index + 1,
+          name: `${subjectName} ${year} ${session.displaySeason}`,
+          url: `${base}/past-papers/${slug}/${year}/${session.season}`,
+        })),
+      },
+      {
+        "@type": "BreadcrumbList",
+        itemListElement: [
+          { "@type": "ListItem", position: 1, name: "Home", item: base },
+          { "@type": "ListItem", position: 2, name: `${board} Past Papers`, item: `${base}${catalogPath}` },
+          { "@type": "ListItem", position: 3, name: subjectName, item: `${base}/past-papers/${slug}` },
+          { "@type": "ListItem", position: 4, name: year, item: pageUrl },
+        ],
+      },
+    ],
+  }
+}
+
+function serializeJsonLd(schema: object): string {
+  return JSON.stringify(schema).replace(/</g, "\\u003c")
+}
+
+export default async function SubjectYearPapersPage({
+  params,
+}: {
+  params: Promise<{ subject: string; year: string }>
+}) {
+  const { subject: slug, year } = await params
+  const subj = getSubjectBySlug(slug)
+  if (!subj) notFound()
+
+  const parsedYear = parseYearParam(year)
+  if (parsedYear === null) notFound()
+  const yearLabel = String(parsedYear)
+
+  const level = levelShort(subj.level)
+  const board = boardDisplay(subj.level)
+  const catalogPath = catalogHref(subj.level)
+  const isCambridge = boardOf(subj.level) === "cambridge"
+  const colorClass = subjectColorClasses[subj.colorKey]
+
+  // Years that actually have papers for this subject — used to filter "Other years" links.
+  const { yearsBySubject } = await getPapersIndex()
+  const indexYearsForSubject = yearsBySubject.get(slug)
+
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  )
+
+  const { data: subjectRow } = await supabase
+    .from("subjects")
+    .select("id")
+    .eq("name", dbNameOf(subj))
+    .maybeSingle()
+
+  if (!subjectRow) notFound()
+
+  const { data } = await supabase
+    .from("papers")
+    .select("id, paper_number, season, pdf_url, markscheme_pdf_url")
+    .eq("subject_id", subjectRow.id)
+    .eq("year", parsedYear)
+    .in("season", Array.from(VALID_SEASONS))
+    .or("pdf_url.not.is.null,markscheme_pdf_url.not.is.null")
+
+  const papers = ((data as PaperRow[]) ?? [])
+    .map((paper) => ({
+      ...paper,
+      season: normalizeSeason(paper.season),
+      pdf_url: isValidPublicUrl(paper.pdf_url) ? paper.pdf_url : null,
+      markscheme_pdf_url: isValidPublicUrl(paper.markscheme_pdf_url) ? paper.markscheme_pdf_url : null,
+    }))
+    .filter((paper) => VALID_SEASONS.has(paper.season))
+    .filter((paper) => Boolean(paper.pdf_url) || Boolean(paper.markscheme_pdf_url))
+
+  if (papers.length === 0) notFound()
+
+  const sessionsBySeason = new Map<string, PaperRow[]>()
+  for (const paper of papers) {
+    if (!sessionsBySeason.has(paper.season)) sessionsBySeason.set(paper.season, [])
+    sessionsBySeason.get(paper.season)!.push(paper)
+  }
+
+  const sessions: SessionGroup[] = Array.from(sessionsBySeason.entries())
+    .sort(([a], [b]) => (SEASON_ORDER[a] ?? 9) - (SEASON_ORDER[b] ?? 9))
+    .map(([season, rows]) => ({
+      season,
+      displaySeason: seasonDisplay(season),
+      papers: dedupeSessionPapers(rows),
+    }))
+    .filter((session) => session.papers.length > 0)
+
+  if (sessions.length === 0) notFound()
+
+  const jsonLd = buildJsonLd(slug, subj.name, level, board, catalogPath, yearLabel, sessions)
+
+  return (
+    <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: serializeJsonLd(jsonLd) }}
+      />
+
+      <main className="min-h-screen bg-black text-white">
+        <div className="border-b border-white/10 bg-black/50 backdrop-blur-sm sticky z-10" style={{ top: "var(--gm-nav-h)" }}>
+          <div className="max-w-4xl mx-auto px-6 py-3 flex items-center gap-2 text-sm flex-wrap">
+            <Link href={catalogPath} className="text-white/50 hover:text-white transition-colors">
+              Past Papers
+            </Link>
+            <span className="text-white/20">›</span>
+            <Link href={`/past-papers/${slug}`} className="text-white/50 hover:text-white transition-colors">
+              {subj.name}
+            </Link>
+            <span className="text-white/20">›</span>
+            <span className="text-white font-medium">{yearLabel}</span>
+          </div>
+        </div>
+
+        <div className="max-w-4xl mx-auto px-6 py-10">
+          <div className="mb-8">
+            <div className="flex items-center gap-3 mb-3">
+              <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${colorClass}`}>
+                {board} {level}
+              </span>
+              <span className="text-white/30 text-sm">{yearLabel}</span>
+            </div>
+            <h1 className="text-3xl font-extrabold mb-2">{subj.name} {yearLabel} Past Papers</h1>
+            <p className="text-white/50">
+              Browse all available {yearLabel} sessions for {board} {level} {subj.name}, with free question papers and mark schemes.
+            </p>
+          </div>
+
+          <div className="space-y-6">
+            {sessions.map((session) => (
+              <div key={session.season} className="bg-white/[0.03] border border-white/10 rounded-xl p-5">
+                <div className="flex items-center justify-between gap-3 mb-4 pb-3 border-b border-white/10">
+                  <h2 className="text-base font-bold text-white/90">{session.displaySeason}</h2>
+                  <Link
+                    href={`/past-papers/${slug}/${yearLabel}/${session.season}`}
+                    className="text-xs text-white/60 hover:text-white transition-colors"
+                  >
+                    Open session →
+                  </Link>
+                </div>
+
+                <div>
+                  {session.papers.map((paper) => {
+                    const paperSlug = toPaperSlug(paper.paper_number)
+                    const pLabel = isCambridge ? formatCambridgePaperLabel(paper.paper_number) : formatPaperLabel(paper.paper_number)
+                    const pCode = isCambridge ? cambridgePaperCode(subj.examCode, paper.paper_number) : ""
+                    return (
+                      <PaperRow
+                        key={paper.id}
+                        href={paperSlug ? `/past-papers/${slug}/${yearLabel}/${session.season}/${paperSlug}` : null}
+                        label={pLabel}
+                        code={pCode}
+                        qpUrl={paper.pdf_url}
+                        msUrl={paper.markscheme_pdf_url}
+                        viewerTitle={`${subj.name} ${yearLabel} ${session.displaySeason} ${pLabel}`}
+                        backPath={`/past-papers/${slug}/${yearLabel}`}
+                      />
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-10 pt-6 border-t border-white/10 space-y-4">
+            <Link
+              href={`/past-papers/${slug}`}
+              className="text-sm text-white/50 hover:text-white transition-colors"
+            >
+              ← All {subj.name} Past Papers
+            </Link>
+
+            {(() => {
+              // Filter "Other years" against the index so we only link to years
+              // that actually have published papers for this subject.
+              const seoData = seoSubjects.find((s) => s.slug === slug)
+              const candidateYears = seoData?.yearsAvailable ?? Array.from({ length: 15 }, (_, i) => 2011 + i)
+              const realYears = indexYearsForSubject ?? new Set<number>()
+              const otherYears = candidateYears
+                .filter((y) => y !== parsedYear)
+                .filter((y) => realYears.has(y))
+              if (otherYears.length === 0) return null
+              return (
+                <div>
+                  <p className="text-xs text-white/30 uppercase tracking-widest mb-2">Other years</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {otherYears.map((y) => (
+                      <Link
+                        key={y}
+                        href={`/past-papers/${slug}/${y}`}
+                        className="text-xs px-2.5 py-1 rounded-full border border-white/10 text-white/40 hover:text-white hover:border-white/30 transition-colors"
+                      >
+                        {y}
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
+        </div>
+      </main>
+    </>
+  )
+}

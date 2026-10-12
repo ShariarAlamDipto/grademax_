@@ -1,0 +1,491 @@
+"use client"
+
+import { useEffect, useRef, useState } from "react"
+
+type Bubble = {
+  id: number
+  text: string
+  x: number
+  y: number
+  vx: number
+  vy: number
+  r: number
+  captured: boolean
+}
+
+type Crumb = { x: number; y: number; tx: number; ty: number }
+
+const WORRIES = [
+  "Procrastination",
+  "Deadlines",
+  "Stress",
+  "Confusion",
+  "Revision Overload",
+  "Time Management",
+  "Exam Fear",
+  "Motivation",
+  "Doubts",
+  "Distractions",
+  "Anxiety",
+  "Burnout",
+]
+
+export default function WorryCatcher() {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const wrapperRef = useRef<HTMLDivElement>(null)
+  const [done, setDone] = useState(false)
+  const [elapsed, setElapsed] = useState<number | null>(null)
+  const [started, setStarted] = useState(false)
+  const [showPlay, setShowPlay] = useState(false)
+  const doneRef = useRef(false)
+  const startTimeRef = useRef<number | null>(null)
+
+  // Decide autoplay or show Play button on mount
+  useEffect(() => {
+    const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
+    // Heuristic: treat devices with <=2GB RAM or low devicePixelRatio as slow
+  const deviceMemory: unknown = (navigator as unknown as { deviceMemory?: unknown }).deviceMemory;
+  const isSlow = isMobile && ((typeof deviceMemory === 'number' && deviceMemory <= 2) || window.devicePixelRatio <= 1.5);
+    if (!isMobile || !isSlow) {
+      setStarted(true);
+    } else {
+      setShowPlay(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!started) return;
+    // Detect mobile
+    const isMobile = typeof window !== "undefined" && window.innerWidth < 768
+    // Start timer on mount
+    startTimeRef.current = performance.now()
+    const canvas = canvasRef.current
+    const wrapper = wrapperRef.current
+    if (!canvas || !wrapper) return
+
+    const ctxMaybe = canvas.getContext("2d")
+    if (!ctxMaybe) return
+    const c = ctxMaybe // <- non-null ctx captured for all inner functions
+
+    // Lower dpr on mobile for perf
+    const dpr = Math.max(1, isMobile ? 1 : window.devicePixelRatio || 1)
+    let w = wrapper.clientWidth
+    let h = Math.max(isMobile ? 340 : 560, Math.floor(wrapper.clientWidth * (isMobile ? 0.7 : 0.55)))
+
+    const resizeCanvas = () => {
+      w = wrapper.clientWidth
+      h = Math.max(isMobile ? 340 : 560, Math.floor(wrapper.clientWidth * (isMobile ? 0.7 : 0.55)))
+      canvas.width = Math.floor(w * dpr)
+      canvas.height = Math.floor(h * dpr)
+      canvas.style.width = `${w}px`
+      canvas.style.height = `${h}px`
+      c.setTransform(1, 0, 0, 1, 0, 0)
+      c.scale(dpr, dpr)
+    }
+    resizeCanvas()
+
+    // Debounce resize events
+    let resizeTimer: ReturnType<typeof setTimeout>
+    const debouncedResize = () => {
+      clearTimeout(resizeTimer)
+      resizeTimer = setTimeout(resizeCanvas, 100)
+    }
+
+    const rand = (min: number, max: number) => Math.random() * (max - min) + min
+    const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v))
+
+    // Responsive font and bubble size
+    const labelFont = isMobile ? "600 10px system-ui, -apple-system, Segoe UI, Roboto" : "600 12px system-ui, -apple-system, Segoe UI, Roboto"
+    c.font = labelFont
+    const radiusFor = (t: string) => {
+      const width = c.measureText(t).width
+      return clamp(width * 0.6 + (isMobile ? 12 : 18), isMobile ? 18 : 26, isMobile ? 36 : 70)
+    }
+
+    // Fewer bubbles on mobile
+    const MOBILE_WORRIES = ["Stress", "Deadlines", "Exam Fear"]
+    const bubbles: Bubble[] = (isMobile ? MOBILE_WORRIES : WORRIES).map((text, i) => ({
+      id: i,
+      text,
+      x: rand(70, w - 70),
+      y: rand(70, h - 140),
+      vx: rand(-0.65, 0.65),
+      vy: rand(-0.55, 0.55),
+      r: radiusFor(text),
+      captured: false,
+    }))
+
+    const crumbs: Crumb[] = []
+    const mouse = { x: w / 2, y: h / 2 }
+    const netRadius = 48
+    const MAX_SPEED = 0.9
+    const DRIFT = 0.015
+    const FRICTION = 0.999
+
+    const onMove = (e: MouseEvent) => {
+      const rect = canvas.getBoundingClientRect()
+      mouse.x = e.clientX - rect.left
+      mouse.y = e.clientY - rect.top
+    }
+    canvas.addEventListener("mousemove", onMove)
+    window.addEventListener("resize", debouncedResize)
+
+    // ----- collisions -----
+    function resolveBubbleCollisions() {
+      for (let i = 0; i < bubbles.length; i++) {
+        const bi = bubbles[i]
+        if (bi.captured) continue
+        for (let j = i + 1; j < bubbles.length; j++) {
+          const bj = bubbles[j]
+          if (bj.captured) continue
+          const dx = bi.x - bj.x
+          const dy = bi.y - bj.y
+          const dist = Math.hypot(dx, dy)
+          const minDist = bi.r + bj.r
+          if (dist < minDist && dist > 0.0001) {
+            // separate
+            const overlap = (minDist - dist) * 0.5
+            const nx = dx / dist
+            const ny = dy / dist
+            bi.x += nx * overlap
+            bi.y += ny * overlap
+            bj.x -= nx * overlap
+            bj.y -= ny * overlap
+            // elastic bounce (equal mass)
+            const rvx = bi.vx - bj.vx
+            const rvy = bi.vy - bj.vy
+            const velAlongNormal = rvx * nx + rvy * ny
+            if (velAlongNormal < 0) {
+              const e = 0.96
+              const jImp = -(1 + e) * velAlongNormal / 2
+              bi.vx += jImp * nx
+              bi.vy += jImp * ny
+              bj.vx -= jImp * nx
+              bj.vy -= jImp * ny
+            }
+          }
+        }
+      }
+    }
+
+    // Pre-render a blurred white circle offscreen once (avoid per-frame filter)
+    const blurSize = 160 // max bubble diameter + padding
+    const blurCanvas = document.createElement("canvas")
+    blurCanvas.width = blurSize
+    blurCanvas.height = blurSize
+    const blurCtx = blurCanvas.getContext("2d")!
+    blurCtx.filter = "blur(6px)"
+    blurCtx.globalAlpha = 0.18
+    blurCtx.fillStyle = "#fff"
+    blurCtx.beginPath()
+    blurCtx.arc(blurSize / 2, blurSize / 2, blurSize * 0.38, 0, Math.PI * 2)
+    blurCtx.fill()
+    blurCtx.filter = "none"
+
+    // ----- draw helpers (glassy bubble) -----
+    function drawGlassBubble(x: number, y: number, r: number, text: string) {
+      // halo / lens glow
+      c.save()
+      c.globalCompositeOperation = "screen"
+      const halo = c.createRadialGradient(x, y, r * 0.2, x, y, r * 1.6)
+      halo.addColorStop(0, "rgba(255,255,255,0.07)")
+      halo.addColorStop(1, "rgba(255,255,255,0)")
+      c.fillStyle = halo
+      c.beginPath()
+      c.arc(x, y, r * 1.5, 0, Math.PI * 2)
+      c.fill()
+      c.restore()
+
+      // body + shadow
+      c.save()
+      c.shadowColor = "rgba(0,0,0,0.35)"
+      c.shadowBlur = 22
+      c.shadowOffsetY = 7
+      const body = c.createRadialGradient(x - r * 0.28, y - r * 0.28, r * 0.2, x, y, r)
+      body.addColorStop(0, "rgba(255,255,255,0.60)")
+      body.addColorStop(0.55, "rgba(255,255,255,0.18)")
+      body.addColorStop(1, "rgba(255,255,255,0.10)")
+      c.fillStyle = body
+      c.beginPath()
+      c.arc(x, y, r, 0, Math.PI * 2)
+      c.fill()
+      c.restore()
+
+      // rim
+      c.strokeStyle = "rgba(255,255,255,0.38)"
+      c.lineWidth = 1.2
+      c.beginPath()
+      c.arc(x, y, r - 0.6, 0, Math.PI * 2)
+      c.stroke()
+
+      // inner glow — draw from pre-rendered offscreen canvas (no per-frame blur)
+      c.save()
+      c.beginPath()
+      c.arc(x, y, r * 0.82, 0, Math.PI * 2)
+      c.clip()
+      const scale = (r * 2) / blurSize
+      c.drawImage(
+        blurCanvas,
+        x - r * 0.2 - blurSize * scale * 0.5,
+        y - r * 0.2 - blurSize * scale * 0.5,
+        blurSize * scale,
+        blurSize * scale
+      )
+      c.restore()
+
+      // caustic reflection arcs
+      c.save()
+      c.lineCap = "round"
+      c.strokeStyle = "rgba(255,255,255,0.55)"
+      c.lineWidth = 1.2
+      c.beginPath()
+      c.arc(x - r * 0.28, y - r * 0.32, r * 0.55, Math.PI * 0.1, Math.PI * 0.9)
+      c.stroke()
+      c.globalAlpha = 0.4
+      c.beginPath()
+      c.arc(x + r * 0.15, y + r * 0.2, r * 0.4, Math.PI * 1.2, Math.PI * 1.9)
+      c.stroke()
+      c.restore()
+
+      // label
+      c.fillStyle = "rgba(10,10,10,0.92)"
+      c.font = labelFont
+      c.textAlign = "center"
+      c.textBaseline = "middle"
+      c.fillText(text, x, y)
+    }
+
+    function drawNet(
+      ctx: CanvasRenderingContext2D,
+      x: number,
+      y: number,
+      r: number,
+      crumbs: Crumb[],
+    ) {
+      const g = ctx // alias
+
+      g.save()
+      g.translate(x, y)
+
+      // rim gradient
+      const rim = g.createRadialGradient(-r * 0.2, -r * 0.2, r * 0.3, 0, 0, r)
+      rim.addColorStop(0, "rgba(255,255,255,0.95)")
+      rim.addColorStop(0.5, "rgba(255,255,255,0.7)")
+      rim.addColorStop(1, "rgba(255,255,255,0.35)")
+
+      // outer rim
+      g.beginPath()
+      g.arc(0, 0, r, 0, Math.PI * 2)
+      g.lineWidth = 3
+      g.strokeStyle = rim
+      g.stroke()
+
+      // clip to circle
+      g.save()
+      g.beginPath()
+      g.arc(0, 0, r - 1.5, 0, Math.PI * 2)
+      g.clip()
+
+      // mesh
+      g.globalAlpha = 0.65
+      g.lineWidth = 1
+      g.strokeStyle = "rgba(255,255,255,0.85)"
+      const step = 8
+      for (let a = -r; a <= r; a += step) {
+        g.beginPath()
+        g.moveTo(-r, a)
+        g.lineTo(r, a)
+        g.stroke()
+      }
+      for (let a = -r; a <= r; a += step) {
+        g.beginPath()
+        g.moveTo(a, -r)
+        g.lineTo(a, r)
+        g.stroke()
+      }
+      g.globalAlpha = 1
+
+      // draw crumbs inside hoop only
+      g.fillStyle = "#fff"
+      for (const c of crumbs) {
+        const dx = c.x - x
+        const dy = c.y - y
+        if (dx * dx + dy * dy <= (r - 3) * (r - 3)) {
+          g.fillRect(dx - 1.5, dy - 1.5, 3, 3)
+        }
+      }
+      g.restore()
+
+      // handle
+      g.beginPath()
+      g.moveTo(r * 0.15, r)
+      g.lineTo(r * 0.15, r + 42)
+      g.lineWidth = 4
+      g.strokeStyle = "rgba(255,255,255,0.85)"
+      g.stroke()
+
+      g.restore()
+    }
+
+    // ----- main loop -----
+    let anim = 0
+    let lastFrame = 0
+    let visible = true
+    const observer = new IntersectionObserver(
+      (entries) => { visible = entries[0].isIntersecting },
+      { threshold: 0 }
+    )
+    observer.observe(canvas)
+
+    const tick = (now = performance.now()) => {
+      // Pause animation when canvas is scrolled out of view
+      if (!visible) {
+        anim = requestAnimationFrame(tick)
+        return
+      }
+      // Lower FPS on mobile
+      if (isMobile && now - lastFrame < 33) {
+        anim = requestAnimationFrame(tick)
+        return
+      }
+      lastFrame = now
+      // clear
+      c.clearRect(0, 0, w, h)
+
+      // Only show grid on desktop
+      if (!isMobile) {
+        c.globalAlpha = 0.05
+        for (let gx = 0; gx < w; gx += 32) {
+          c.beginPath()
+          c.moveTo(gx, 0)
+          c.lineTo(gx, h)
+          c.strokeStyle = "#fff"
+          c.stroke()
+        }
+        for (let gy = 0; gy < h; gy += 32) {
+          c.beginPath()
+          c.moveTo(0, gy)
+          c.lineTo(w, gy)
+          c.strokeStyle = "#fff"
+          c.stroke()
+        }
+        c.globalAlpha = 1
+      }
+
+      // motion update
+      let allCaptured = true
+      for (const b of bubbles) {
+        if (b.captured) continue
+        allCaptured = false
+
+        // drift + friction + clamp
+        b.vx = clamp((b.vx + rand(-DRIFT, DRIFT)) * FRICTION, -MAX_SPEED, MAX_SPEED)
+        b.vy = clamp((b.vy + rand(-DRIFT, DRIFT)) * FRICTION, -MAX_SPEED, MAX_SPEED)
+
+        b.x += b.vx
+        b.y += b.vy
+        // walls
+        if (b.x < b.r) { b.x = b.r; b.vx *= -1 }
+        if (b.x > w - b.r) { b.x = w - b.r; b.vx *= -1 }
+        if (b.y < b.r) { b.y = b.r; b.vy *= -1 }
+        if (b.y > h - b.r) { b.y = h - b.r; b.vy *= -1 }
+      }
+
+      // collisions
+      resolveBubbleCollisions()
+
+      // net catching → spawn crumbs
+      for (const b of bubbles) {
+        if (b.captured) continue
+        const dx = b.x - mouse.x
+        const dy = b.y - mouse.y
+        const dist = Math.hypot(dx, dy)
+        if (dist <= b.r + netRadius * 0.65) {
+          b.captured = true
+          for (let i = 0; i < 10; i++) {
+            const angle = Math.random() * Math.PI * 2
+            const r = rand(6, netRadius - 6)
+            crumbs.push({ x: b.x, y: b.y, tx: Math.cos(angle) * r, ty: Math.sin(angle) * r })
+          }
+        }
+      }
+
+      // draw bubbles
+      for (const b of bubbles) {
+        if (!b.captured) drawGlassBubble(b.x, b.y, b.r, b.text)
+      }
+
+      // crumbs ease into the net
+      c.fillStyle = "#fff"
+      for (const p of crumbs) {
+        p.x += (mouse.x + p.tx - p.x) * 0.18
+        p.y += (mouse.y + p.ty - p.y) * 0.18
+      }
+
+      // net (hoop + clipped mesh + crumbs inside)
+      drawNet(c, mouse.x, mouse.y, netRadius, crumbs)
+
+      if (allCaptured && !doneRef.current) {
+        doneRef.current = true
+        setDone(true)
+        if (startTimeRef.current !== null) {
+          setElapsed(performance.now() - startTimeRef.current)
+        }
+      }
+
+      anim = requestAnimationFrame(tick)
+    }
+
+    tick()
+
+    return () => {
+      cancelAnimationFrame(anim)
+      clearTimeout(resizeTimer)
+      observer.disconnect()
+      canvas.removeEventListener("mousemove", onMove)
+      window.removeEventListener("resize", debouncedResize)
+    }
+  }, [started])
+
+  return (
+    <section className="mx-auto max-w-6xl px-2 sm:px-4 pb-16 text-center">
+      <h2 className="text-2xl sm:text-3xl md:text-4xl font-semibold mb-4 sm:mb-6">Catch your problems</h2>
+      {!started && showPlay ? (
+        <div className="flex flex-col items-center justify-center h-[340px] sm:h-[440px] md:h-[560px]">
+          <button
+            className="px-6 py-3 rounded-full bg-gradient-to-r from-blue-500 to-purple-500 text-white font-bold text-lg shadow-lg hover:scale-105 active:scale-95 transition mb-4"
+            onClick={() => setStarted(true)}
+          >
+            Play
+          </button>
+          <p className="text-xs sm:text-sm text-gray-400">Tap Play to start the animation.</p>
+        </div>
+      ) : (
+        <>
+          <div
+            ref={wrapperRef}
+            className="relative w-full h-[340px] sm:h-[440px] md:h-[560px] rounded-2xl overflow-hidden cursor-none"
+            style={{ background: "linear-gradient(to bottom, #0d1526, #060912)", border: "1px solid rgba(255,255,255,0.08)" }}
+            aria-label="Interactive area: catch your problems"
+          >
+            <canvas ref={canvasRef} className="w-full h-full" />
+            {done && (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <div className="rounded-xl bg-black/70 px-3 sm:px-5 py-2 sm:py-3 text-center">
+                  {elapsed !== null ? (
+                    <p className="text-base sm:text-lg md:text-xl font-semibold">
+                      You caught your problems in: {(elapsed / 1000).toFixed(3)} seconds
+                    </p>
+                  ) : (
+                    <p className="text-base sm:text-lg md:text-xl font-semibold">GradeMax will solve it all ✨</p>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+          <p className="mt-2 sm:mt-3 text-xs sm:text-sm text-gray-400">Move your finger or mouse and catch the worries with the net.</p>
+        </>
+      )}
+    </section>
+  )
+}

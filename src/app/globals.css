@@ -1,0 +1,811 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ═══════════════════════════════════════════════════════════════
+   GradeMax Design System v4 — Dark + Light Mode
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Dark Mode (default) ── */
+:root,
+html.dark {
+  /* Tells the browser to paint its OWN widgets dark: the popup list a <select>
+     opens, date pickers, scrollbars, autofill backgrounds. Those are drawn by
+     the browser, not by us, so no amount of CSS on the element reaches them —
+     without this line a dropdown opens as black text on a black list. */
+  color-scheme: dark;
+  --gm-bg:           #060912;
+  --gm-surface:      #0C1120;
+  --gm-surface-2:    #101829;
+  --gm-surface-3:    #161F35;
+
+  --gm-text:         #EDF0F7;
+  --gm-text-2:       #9CA3AF;
+  --gm-text-3:       #6B7280;
+
+  --gm-blue:         #6EA8FE;
+  --gm-blue-bg:      rgba(110, 168, 254, 0.10);
+  --gm-blue-ring:    rgba(110, 168, 254, 0.25);
+  --gm-blue-hover:   rgba(110, 168, 254, 0.18);
+
+  --gm-amber:        #F59E0B;
+  --gm-amber-hover:  #D97706;
+  --gm-amber-bg:     rgba(245, 158, 11, 0.10);
+  --gm-amber-ring:   rgba(245, 158, 11, 0.30);
+
+  --gm-green:        #34D399;
+  --gm-green-bg:     rgba(52, 211, 153, 0.10);
+
+  --gm-border:       rgba(255, 255, 255, 0.07);
+  --gm-border-2:     rgba(255, 255, 255, 0.10);
+  --gm-border-input: #5B6470;
+
+  --gm-nav-bg:       rgba(6, 9, 18, 0.88);
+  --gm-nav-border:   rgba(255, 255, 255, 0.05);
+
+  --gm-card-bg:      rgba(255, 255, 255, 0.02);
+  --gm-card-hover:   rgba(255, 255, 255, 0.04);
+
+  --gm-lh: 1.7;
+  --gm-ls: 0.01em;
+}
+
+/* ── Light Mode ── */
+html.light {
+  color-scheme: light;
+  --gm-bg:           #F5F7FB;
+  --gm-surface:      #FFFFFF;
+  --gm-surface-2:    #EEF2F8;
+  --gm-surface-3:    #E5EAF3;
+
+  --gm-text:         #111827;
+  --gm-text-2:       #374151;
+  --gm-text-3:       #6B7280;
+
+  --gm-blue:         #2563EB;
+  --gm-blue-bg:      rgba(37, 99, 235, 0.08);
+  --gm-blue-ring:    rgba(37, 99, 235, 0.20);
+  --gm-blue-hover:   rgba(37, 99, 235, 0.14);
+
+  --gm-amber:        #D97706;
+  --gm-amber-hover:  #B45309;
+  --gm-amber-bg:     rgba(217, 119, 6, 0.08);
+  --gm-amber-ring:   rgba(217, 119, 6, 0.25);
+
+  --gm-green:        #059669;
+  --gm-green-bg:     rgba(5, 150, 105, 0.08);
+
+  --gm-border:       rgba(0, 0, 0, 0.08);
+  --gm-border-2:     rgba(0, 0, 0, 0.12);
+  --gm-border-input: #9CA3AF;
+
+  --gm-nav-bg:       rgba(245, 247, 251, 0.92);
+  --gm-nav-border:   rgba(0, 0, 0, 0.07);
+
+  --gm-card-bg:      rgba(0, 0, 0, 0.025);
+  --gm-card-hover:   rgba(0, 0, 0, 0.045);
+}
+
+/* ── Base ── */
+*, *::before, *::after { box-sizing: border-box; }
+
+/* Height of the fixed navbar (.gm-nav), so page content, sticky bars and
+   anchor jumps all clear it. Phones add a second row of link pills, pinned to
+   a fixed height in Navbar.tsx: 68px bar + 49px row + 1px border. Keep the
+   two in step — a hard-coded 112px left every page's top 6px under the nav. */
+:root { --gm-nav-h: 69px; }
+@media (max-width: 639px) {
+  :root { --gm-nav-h: 118px; }
+}
+
+html {
+  background-color: var(--gm-bg);
+  color: var(--gm-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  scroll-behavior: smooth;
+  scroll-padding-top: var(--gm-nav-h);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* iOS zooms the page into any focused form field under 16px and leaves it
+   zoomed. On touch screens every text field is 16px; !important so it also
+   beats inline font sizes. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
+body {
+  line-height: var(--gm-lh);
+  letter-spacing: var(--gm-ls);
+  background-color: var(--gm-bg);
+  color: var(--gm-text);
+  overflow-x: hidden;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: var(--gm-bg); }
+::-webkit-scrollbar-thumb { background: var(--gm-border-2); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: var(--gm-border-input); }
+
+/* ── Sticky blur nav ── */
+.gm-nav {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%;
+  z-index: 50;
+  background: var(--gm-nav-bg);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border-bottom: 1px solid var(--gm-nav-border);
+  color: var(--gm-text);
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+/* ── Buttons ── */
+.btn-beacon {
+  background-color: var(--gm-amber);
+  color: #000000;
+  font-weight: 700;
+  font-size: 0.9rem;
+  padding: 0.75rem 1.75rem;
+  border-radius: 0.75rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  white-space: nowrap;
+  transition: background-color 0.18s ease, transform 0.15s ease, box-shadow 0.18s ease;
+  box-shadow: 0 0 0 0 var(--gm-amber-ring);
+}
+.btn-beacon:hover {
+  background-color: var(--gm-amber-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 24px var(--gm-amber-ring);
+}
+
+.btn-ghost-amber {
+  color: var(--gm-amber);
+  border: 1px solid var(--gm-amber-ring);
+  background: var(--gm-amber-bg);
+  font-weight: 600;
+  font-size: 0.9rem;
+  padding: 0.75rem 1.75rem;
+  border-radius: 0.75rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  white-space: nowrap;
+  transition: background-color 0.18s ease, border-color 0.18s ease;
+}
+.btn-ghost-amber:hover {
+  background: var(--gm-amber-bg);
+  border-color: var(--gm-amber);
+}
+
+.btn-ghost-blue {
+  color: var(--gm-blue);
+  border: 1px solid var(--gm-blue-ring);
+  background: var(--gm-blue-bg);
+  font-weight: 600;
+  font-size: 0.9rem;
+  padding: 0.75rem 1.75rem;
+  border-radius: 0.75rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  white-space: nowrap;
+  transition: background-color 0.18s ease, border-color 0.18s ease;
+}
+.btn-ghost-blue:hover {
+  background: var(--gm-blue-hover);
+  border-color: var(--gm-blue);
+}
+
+/* ── Cards ── */
+.gm-card {
+  background: var(--gm-card-bg);
+  border: 1px solid var(--gm-border-2);
+  border-radius: 1rem;
+  transition: border-color 0.2s ease, transform 0.2s ease, background 0.2s ease;
+}
+.gm-card:hover {
+  border-color: var(--gm-blue);
+  transform: translateY(-2px);
+  background: var(--gm-card-hover);
+}
+.gm-card-amber:hover {
+  border-color: var(--gm-amber);
+  transform: translateY(-2px);
+}
+
+/* ── Gradient text ── */
+.text-gradient-amber {
+  background: linear-gradient(135deg, #F59E0B 0%, #FCD34D 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.text-gradient-blue {
+  background: linear-gradient(135deg, #6EA8FE 0%, #93C5FD 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Nav gradient link ── */
+.gradient-hover-sea {
+  color: var(--gm-text-2);
+  transition: color 0.2s ease;
+  font-size: 0.875rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.gradient-hover-sea:hover { color: var(--gm-text); }
+
+/* ── Table banding ── */
+.gm-table-row:nth-child(even) { background: var(--gm-surface); }
+.gm-table-row { border-left: 2px solid transparent; transition: border-color 0.15s; }
+.gm-table-row:hover { border-left-color: var(--gm-blue); background: var(--gm-surface-2); }
+
+/* ── Custom checkbox ── */
+.gm-checkbox {
+  width: 44px; height: 44px;
+  accent-color: var(--gm-blue);
+  border: 2px solid var(--gm-border-input);
+  border-radius: 4px;
+}
+
+/* ── Bento grid ── */
+.bento-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+@media (max-width: 768px) {
+  .bento-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 480px) {
+  .bento-grid { grid-template-columns: 1fr; }
+}
+
+.bento-wide   { grid-column: span 2; }
+.bento-tall   { grid-row: span 2; }
+.bento-full   { grid-column: span 3; }
+
+@media (max-width: 768px) {
+  .bento-wide { grid-column: span 2; }
+  .bento-tall { grid-row: span 1; }
+  .bento-full { grid-column: span 2; }
+}
+@media (max-width: 480px) {
+  .bento-wide, .bento-tall, .bento-full { grid-column: span 1; grid-row: span 1; }
+}
+
+/* ── Pulse animation for amber beacon ── */
+@keyframes beacon-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4); }
+  50%       { box-shadow: 0 0 0 8px rgba(245, 158, 11, 0); }
+}
+.beacon-pulse { animation: beacon-pulse 2.5s ease-in-out infinite; }
+
+/* ── Hero text reveal ── */
+@keyframes hero-reveal {
+  from { opacity: 0; transform: translateY(28px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.hero-line-1 { animation: hero-reveal 0.75s cubic-bezier(0.22,1,0.36,1) 0.05s both; }
+.hero-line-2 { animation: hero-reveal 0.75s cubic-bezier(0.22,1,0.36,1) 0.18s both; }
+.hero-sub    { animation: hero-reveal 0.75s cubic-bezier(0.22,1,0.36,1) 0.32s both; }
+.hero-cta    { animation: hero-reveal 0.75s cubic-bezier(0.22,1,0.36,1) 0.46s both; }
+
+/* ── Section fade-up ── */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-up { animation: fade-up 0.6s ease both; }
+.delay-100 { animation-delay: 0.1s; }
+.delay-200 { animation-delay: 0.2s; }
+.delay-300 { animation-delay: 0.3s; }
+
+/* ── Feature card scroll reveal ── */
+@keyframes card-reveal {
+  from { opacity: 0; transform: translateY(24px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ── Subject float grid (scroll-triggered via data-visible) ── */
+@keyframes float-from-right {
+  from { opacity: 0; transform: translateX(36px) scale(0.94); }
+  to   { opacity: 1; transform: translateX(0) scale(1); }
+}
+@keyframes float-from-left {
+  from { opacity: 0; transform: translateX(-36px) scale(0.94); }
+  to   { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+.subject-float-item {
+  opacity: 0;
+  transform: scale(0.94);
+}
+
+.subject-float-grid[data-visible="1"] .subject-float-item:nth-child(odd) {
+  animation: float-from-right 0.55s cubic-bezier(0.22,1,0.36,1) both;
+  animation-delay: var(--delay, 0s);
+}
+.subject-float-grid[data-visible="1"] .subject-float-item:nth-child(even) {
+  animation: float-from-left 0.55s cubic-bezier(0.22,1,0.36,1) both;
+  animation-delay: var(--delay, 0s);
+}
+
+/* ── Feature cards (always visible) ── */
+.feature-card-grid[data-visible="1"] .feature-card-item {
+  animation: card-reveal 0.6s cubic-bezier(0.22,1,0.36,1) both;
+  animation-delay: var(--delay, 0s);
+}
+.feature-card-item {
+  opacity: 0;
+}
+
+/* ── Section divider ── */
+.gm-divider { border-top: 1px solid var(--gm-border); }
+
+/* ── Hover-only link utilities ── */
+.gm-link {
+  color: var(--gm-text-3);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+.gm-link:hover { color: var(--gm-text); }
+
+.gm-link-blue {
+  color: var(--gm-text-3);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+.gm-link-blue:hover { color: var(--gm-blue); }
+
+/* Community / social links (contact page cards + footer icons) */
+.gm-social-card {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.125rem;
+  background: var(--gm-card-bg);
+  border: 1px solid var(--gm-border-2);
+  border-radius: 1rem;
+  color: var(--gm-text);
+  text-decoration: none;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.gm-social-card:hover { border-color: var(--gm-social-accent); transform: translateY(-1px); }
+.gm-social-card:focus-visible { outline: 2px solid var(--gm-social-accent); outline-offset: 2px; }
+.gm-social-cta {
+  flex-shrink: 0;
+  padding: 0.45rem 0.9rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #fff;
+  background: var(--gm-social-accent);
+  white-space: nowrap;
+}
+.gm-social-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 999px;
+  border: 1px solid var(--gm-border-2);
+  color: var(--gm-text-3);
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.gm-social-icon:hover,
+.gm-social-icon:focus-visible { color: var(--gm-social-accent); border-color: var(--gm-social-accent); }
+
+/* Subject / Catalog card hover */
+.subject-card {
+  background: var(--gm-card-bg);
+  border: 1px solid var(--gm-border-2);
+  border-radius: 1rem;
+  padding: 1.25rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  text-decoration: none;
+  transition: border-color 0.2s ease, transform 0.2s ease, background 0.2s ease;
+}
+.subject-card:hover {
+  transform: translateY(-3px);
+  background: var(--gm-card-hover);
+}
+
+/* Per-subject accent colours on hover */
+.subject-card.accent-orange:hover  { border-color: #F97316; }
+.subject-card.accent-blue:hover    { border-color: #6EA8FE; }
+.subject-card.accent-green:hover   { border-color: #34D399; }
+.subject-card.accent-cyan:hover    { border-color: #22D3EE; }
+.subject-card.accent-violet:hover  { border-color: #A78BFA; }
+.subject-card.accent-amber:hover   { border-color: #F59E0B; }
+.subject-card.accent-pink:hover    { border-color: #F472B6; }
+
+/* Topic pill */
+.topic-pill {
+  background: var(--gm-card-bg);
+  border: 1px solid var(--gm-border-2);
+  border-radius: 99px;
+  padding: 0.4rem 1rem;
+  font-size: 0.78rem;
+  color: var(--gm-text-2);
+  text-decoration: none;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.topic-pill:hover {
+  border-color: var(--gm-blue);
+  color: var(--gm-text);
+}
+
+/* Quick footer/page links */
+.quick-link {
+  color: var(--gm-text-3);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+.quick-link:hover { color: var(--gm-text); }
+
+/* ── Theme toggle button ── */
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--gm-border-2);
+  background: var(--gm-card-bg);
+  color: var(--gm-text-2);
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+  flex-shrink: 0;
+}
+.theme-toggle:hover {
+  background: var(--gm-card-hover);
+  border-color: var(--gm-border-input);
+  color: var(--gm-text);
+}
+
+/* ── Lectures/Auth page inputs ── */
+.gm-input {
+  background: var(--gm-surface);
+  border: 1px solid var(--gm-border-2);
+  border-radius: 0.625rem;
+  color: var(--gm-text);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.gm-input:focus { border-color: var(--gm-blue); }
+.gm-input::placeholder { color: var(--gm-text-3); }
+/* `appearance: none` removes the native background, text colour AND the arrow,
+   so all three have to be supplied here. Previously only the stripping was
+   done, which left the control invisible against a dark page. */
+.gm-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: var(--gm-surface);
+  color: var(--gm-text);
+  border: 1px solid var(--gm-border-2);
+  border-radius: 0.625rem;
+  /* Right padding leaves room for the arrow drawn below. */
+  padding: 0.5rem 2rem 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  font-family: inherit;
+  line-height: 1.4;
+  outline: none;
+  cursor: pointer;
+  max-width: 100%;
+  background-repeat: no-repeat;
+  background-position: right 0.65rem center;
+  background-size: 0.7rem;
+  /* Chevron, stroked in the dark-mode text colour. */
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5 6 6.5l5-5' stroke='%23EDF0F7' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  transition: border-color 0.15s ease;
+}
+/* A data-URI cannot read currentColor, so the light-mode arrow is its own rule. */
+html.light .gm-select {
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5 6 6.5l5-5' stroke='%23111827' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.gm-select:focus,
+.gm-select:focus-visible { border-color: var(--gm-blue); }
+.gm-select:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* The popup list is the browser's, and `color-scheme` above is what themes it.
+   These two are the belt-and-braces for Windows/Linux Chrome, which paints an
+   option's background from the rule rather than from the scheme. */
+select option,
+select optgroup {
+  background-color: var(--gm-surface);
+  color: var(--gm-text);
+}
+
+/* Any <select> that carries no styling of its own — several admin screens —
+   still has to be legible in both themes. Anything with inline styles or its
+   own class overrides this, so it is a floor, not a constraint. */
+select:not([class]):not([style]) {
+  background-color: var(--gm-surface);
+  color: var(--gm-text);
+  border: 1px solid var(--gm-border-2);
+  border-radius: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  font-family: inherit;
+  font-size: 0.85rem;
+}
+
+/* ── Page section backgrounds (use CSS vars to support themes) ── */
+.page-bg        { background: var(--gm-bg); }
+.surface-bg     { background: var(--gm-surface); }
+.surface-2-bg   { background: var(--gm-surface-2); }
+
+/* ═══════════════════════════════════════════════════════════════
+   Light-mode: override hardcoded dark Tailwind utility classes
+   so that components using gray-900/800/700 work in white mode
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Backgrounds ── */
+html.light .bg-black              { background-color: var(--gm-bg)       !important; }
+html.light .bg-gray-950           { background-color: var(--gm-bg)       !important; }
+html.light .bg-gray-900           { background-color: var(--gm-bg)       !important; }
+html.light .bg-gray-800           { background-color: var(--gm-surface)   !important; }
+html.light .bg-gray-700           { background-color: var(--gm-surface-2) !important; }
+html.light .bg-gray-600           { background-color: var(--gm-surface-3) !important; }
+html.light .bg-gray-800\/80       { background-color: var(--gm-surface)   !important; }
+html.light .bg-gray-800\/60       { background-color: var(--gm-surface)   !important; }
+html.light .bg-gray-800\/50       { background-color: var(--gm-surface)   !important; }
+html.light .bg-gray-800\/40       { background-color: var(--gm-surface)   !important; }
+html.light .bg-gray-800\/30       { background-color: var(--gm-surface)   !important; }
+html.light .bg-gray-700\/50       { background-color: var(--gm-surface-2) !important; }
+html.light .bg-gray-700\/40       { background-color: var(--gm-surface-2) !important; }
+html.light .bg-gray-700\/30       { background-color: var(--gm-surface-2) !important; }
+html.light .bg-gray-900\/80       { background-color: var(--gm-surface-2) !important; }
+html.light .bg-gray-900\/60       { background-color: var(--gm-surface-2) !important; }
+
+/* ── Gradient resets (Worksheet/TestBuilder root containers) ── */
+html.light .from-gray-900 { --tw-gradient-from: var(--gm-bg)      !important; }
+html.light .via-black     { --tw-gradient-via:  var(--gm-surface)  !important; }
+html.light .to-gray-900   { --tw-gradient-to:   var(--gm-bg)      !important; }
+
+/* ── Text ── */
+html.light .text-white    { color: var(--gm-text)   !important; }
+html.light .text-gray-100 { color: var(--gm-text)   !important; }
+html.light .text-gray-200 { color: var(--gm-text-2) !important; }
+html.light .text-gray-300 { color: var(--gm-text-2) !important; }
+html.light .text-gray-400 { color: var(--gm-text-3) !important; }
+html.light .text-gray-500 { color: var(--gm-text-3) !important; }
+html.light .text-gray-600 { color: var(--gm-text-3) !important; }
+
+/* ── Borders ── */
+html.light .border-gray-800     { border-color: var(--gm-border)       !important; }
+html.light .border-gray-700     { border-color: var(--gm-border)       !important; }
+html.light .border-gray-600     { border-color: var(--gm-border-2)     !important; }
+html.light .border-gray-500     { border-color: var(--gm-border-input) !important; }
+html.light .border-gray-300     { border-color: var(--gm-border-2)     !important; }
+html.light .border-gray-200     { border-color: var(--gm-border)       !important; }
+html.light .border-gray-600\/40 { border-color: var(--gm-border)       !important; }
+
+/* ── Inputs & selects (attribute-based override for safety) ── */
+html.light input[class*="bg-gray"],
+html.light select[class*="bg-gray"],
+html.light textarea[class*="bg-gray"] {
+  background-color: var(--gm-surface)   !important;
+  color:            var(--gm-text)      !important;
+  border-color:     var(--gm-border-2)  !important;
+}
+html.light .placeholder-gray-500::placeholder { color: var(--gm-text-3) !important; }
+
+/* ── Blue accent ── */
+html.light .bg-blue-900\/50,
+html.light .bg-blue-900\/40,
+html.light .bg-blue-900\/20       { background-color: var(--gm-blue-bg)   !important; }
+html.light .text-blue-300,
+html.light .text-blue-400         { color: var(--gm-blue)                 !important; }
+html.light .border-blue-500,
+html.light .border-blue-400       { border-color: var(--gm-blue)          !important; }
+html.light .border-blue-500\/50,
+html.light .border-blue-500\/30   { border-color: var(--gm-blue-ring)     !important; }
+html.light .hover\:text-blue-300:hover { color: var(--gm-blue)            !important; }
+
+/* ── Green (PDFs ready / download) ── */
+html.light .from-green-900        { --tw-gradient-from: rgba(209,250,229,0.6) !important; }
+html.light .to-emerald-900        { --tw-gradient-to:   rgba(209,250,229,0.4) !important; }
+html.light .border-green-500      { border-color: var(--gm-green)         !important; }
+html.light .text-green-300,
+html.light .text-green-400        { color: var(--gm-green)                !important; }
+html.light .bg-emerald-900\/60    { background-color: var(--gm-green-bg)  !important; }
+html.light .bg-emerald-500\/20    { background-color: var(--gm-green-bg)  !important; }
+html.light .text-emerald-300,
+html.light .text-emerald-400      { color: var(--gm-green)                !important; }
+html.light .border-emerald-500\/50 { border-color: rgba(5,150,105,0.3)   !important; }
+html.light .hover\:bg-green-900:hover { background-color: var(--gm-green-bg) !important; }
+
+/* ── Amber / difficulty medium ── */
+html.light .bg-amber-900\/60      { background-color: var(--gm-amber-bg)  !important; }
+html.light .border-amber-500\/50  { border-color: var(--gm-amber-ring)    !important; }
+html.light .text-amber-300        { color: var(--gm-amber)                !important; }
+
+/* ── Red / errors ── */
+html.light .bg-red-900,
+html.light .bg-red-900\/60,
+html.light .bg-red-900\/80        { background-color: rgba(254,226,226,0.7) !important; }
+html.light .text-red-300,
+html.light .text-red-400,
+html.light .text-red-200          { color: #dc2626                        !important; }
+html.light .border-red-500        { border-color: #ef4444                 !important; }
+html.light .border-red-500\/50,
+html.light .border-red-500\/40    { border-color: rgba(239,68,68,0.4)     !important; }
+
+/* ── Purple / diagram badge ── */
+html.light .bg-purple-900\/50     { background-color: rgba(237,233,254,0.5) !important; }
+html.light .text-purple-300       { color: #6d28d9                        !important; }
+html.light .border-purple-500\/30 { border-color: rgba(109,40,217,0.3)    !important; }
+
+/* ── Subject selector active states ── */
+html.light .bg-orange-900\/40     { background-color: rgba(255,237,213,0.7) !important; }
+html.light .bg-violet-900\/40     { background-color: rgba(237,233,254,0.7) !important; }
+html.light .bg-emerald-900\/40    { background-color: rgba(209,250,229,0.7) !important; }
+html.light .bg-sky-900\/40        { background-color: rgba(224,242,254,0.7) !important; }
+html.light .bg-red-900\/40        { background-color: rgba(254,226,226,0.7) !important; }
+html.light .bg-indigo-900\/40     { background-color: rgba(238,242,255,0.7) !important; }
+
+/* ── Misc hover states ── */
+html.light .hover\:bg-gray-700:hover        { background-color: var(--gm-surface-2) !important; }
+html.light .hover\:bg-gray-700\/50:hover    { background-color: var(--gm-surface-2) !important; }
+html.light .hover\:bg-gray-700\/40:hover    { background-color: var(--gm-surface-2) !important; }
+html.light .hover\:bg-gray-600:hover        { background-color: var(--gm-surface-3) !important; }
+html.light .hover\:bg-gray-600\/40:hover    { background-color: var(--gm-surface-3) !important; }
+html.light .hover\:border-gray-500:hover    { border-color: var(--gm-border-input)  !important; }
+html.light .bg-gray-700\/80                 { background-color: var(--gm-surface-2) !important; }
+
+/* ── Spinner fix ── */
+html.light .border-b-2.border-white         { border-bottom-color: var(--gm-blue)   !important; }
+
+/* ── Light mode: ensure text is dark enough ── */
+html.light body {
+  color: var(--gm-text);
+}
+
+/* ── PDF viewer ──────────────────────────────────────────────────────────────
+   Side-by-side needs real width; below the split breakpoint the control is
+   hidden rather than disabled (ViewerClient also forces single view there). */
+@media (max-width: 1023px) {
+  .gm-split-segment { display: none; }
+}
+
+/* ── Past-paper listings ─────────────────────────────────────────────────────
+   One compact row per paper, shared by the subject / year / session pages so
+   every level of the tree reads the same way. */
+.gm-paper-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.5rem 0.25rem;
+  border-bottom: 1px solid var(--gm-border);
+  transition: background 0.12s ease;
+}
+.gm-paper-row:last-child { border-bottom: none; }
+.gm-paper-row:hover { background: var(--gm-card-hover); }
+
+.gm-paper-name {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  min-width: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--gm-text);
+  text-decoration: none;
+}
+.gm-paper-name:hover { color: var(--gm-blue); }
+
+.gm-paper-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--gm-text-3);
+}
+
+.gm-paper-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  flex-shrink: 0;
+}
+
+/* Text-first actions: no pill chrome, so a long session reads as a clean list. */
+.gm-paper-action {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--gm-text-3);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 0.12s ease;
+}
+.gm-paper-action:hover { color: var(--gm-blue); }
+.gm-paper-action[data-muted="true"] {
+  color: var(--gm-text-3);
+  opacity: 0.35;
+  cursor: default;
+}
+.gm-paper-action[data-muted="true"]:hover { color: var(--gm-text-3); }
+
+/* On touch screens the bare-text QP / MS / Both links (~20px, 14px apart)
+   were easy to mis-tap. Inline padding grows the hit area to ~40px without
+   changing the row's height. */
+@media (pointer: coarse) {
+  .gm-paper-actions { gap: 0.35rem; }
+  .gm-paper-action { padding: 0.7rem 0.45rem; }
+}
+
+/* ── Store ──────────────────────────────────────────────────────────────────
+   The product, cart and checkout pages put a sticky summary beside the main
+   column. Below 60rem there is no room for two columns, so the summary drops
+   underneath and the sticky positioning is released -- a sticky panel in a
+   single-column phone layout pins itself over the content the buyer is
+   scrolling through. */
+.gm-store-product-grid {
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+}
+
+@media (max-width: 60rem) {
+  .gm-store-product-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .gm-store-product-grid > aside {
+    position: static !important;
+    top: auto !important;
+  }
+}
+
+/* ── Promo banner (scrolling strip under the navbar, PromoBanner.tsx) ── */
+.gm-promo {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  background: var(--gm-amber-bg);
+  border-bottom: 1px solid var(--gm-amber-ring);
+  color: var(--gm-amber);
+  font-size: 0.85rem;
+  font-weight: 600;
+  line-height: 2.1rem;
+  text-decoration: none;
+}
+.gm-promo:hover { background: var(--gm-amber-ring); }
+.gm-promo-track {
+  display: inline-flex;
+  animation: gm-promo-scroll 32s linear infinite;
+}
+.gm-promo:hover .gm-promo-track,
+.gm-promo:focus-visible .gm-promo-track { animation-play-state: paused; }
+.gm-promo-item { padding-right: 6rem; }
+@keyframes gm-promo-scroll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gm-promo { white-space: normal; text-align: center; padding: 0 1rem; }
+  .gm-promo-track { animation: none; display: inline; }
+  .gm-promo-item + .gm-promo-item { display: none; }
+  .gm-promo-item { padding-right: 0; }
+}

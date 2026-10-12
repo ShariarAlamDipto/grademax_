@@ -1,0 +1,777 @@
+'use client';
+
+import { useState, useEffect, useRef } from 'react';
+import { useQuestionLimit } from '@/lib/useQuestionLimit';
+import { parseQuestionCount } from '@/lib/questionCountInput';
+import { buildPdfInBrowser } from '@/lib/clientPdfBuild';
+import MultiPagePdfPreview from '@/components/MultiPagePdfPreview';
+import { handlePdfDownloadClick, handlePdfPreviewClick } from '@/lib/savePdf';
+import SignInPrompt from '@/components/SignInPrompt';
+
+interface Subject {
+  id: string;
+  code: string;
+  name: string;
+  level?: string;
+  board?: string;
+}
+
+interface Topic {
+  id: string;
+  code: string;
+  name: string;
+  description?: string;
+}
+
+const CURRENT_YEAR = new Date().getFullYear();
+const START_YEAR = 2011;
+/** Questions requested when the student leaves Max Questions empty or invalid. */
+const DEFAULT_QUESTION_COUNT = 20;
+const YEARS = Array.from({ length: CURRENT_YEAR - START_YEAR + 1 }, (_, i) => CURRENT_YEAR - i);
+
+interface Question {
+  id: string;
+  questionNumber: string;
+  topics: string[];
+  difficulty: string;
+  qpPageUrl: string;
+  msPageUrl: string | null;
+  hasDiagram: boolean;
+  year: number;
+  season: string;
+  paper: string;
+}
+
+interface WorksheetGeneratorProps {
+  initialSubjects: Subject[];
+  initialTopics: Topic[];
+}
+
+function fireTrack(feature: string, payload?: Record<string, unknown>) {
+  fetch("/api/track", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ feature, ...payload }),
+  }).catch(() => undefined);
+}
+
+/**
+ * Fetch wrapper that survives flaky mobile networks:
+ *   - applies an explicit timeout so the UI never hangs forever waiting
+ *     on a request the platform has silently abandoned
+ *   - retries once on network-level failure (the case that surfaces as
+ *     `TypeError: Failed to fetch` on phones when the connection drops)
+ *   - rewrites the opaque message into something the user can act on
+ *
+ * On a non-network failure (HTTP error, parse error) we surface the
+ * underlying message unchanged so the caller can still react.
+ */
+async function fetchWithRetry(
+  input: RequestInfo | URL,
+  init: RequestInit & { timeoutMs?: number } = {},
+): Promise<Response> {
+  const { timeoutMs = 75000, ...rest } = init;
+
+  const callOnce = () => fetch(input, { ...rest, signal: AbortSignal.timeout(timeoutMs) });
+
+  try {
+    return await callOnce();
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'TimeoutError') {
+      throw new Error(
+        `The server took longer than ${Math.round(timeoutMs / 1000)} s to respond. Try a smaller worksheet or reconnect to a stronger network.`,
+      );
+    }
+    if (err instanceof TypeError) {
+      try {
+        return await callOnce();
+      } catch (retryErr) {
+        if (retryErr instanceof DOMException && retryErr.name === 'TimeoutError') {
+          throw new Error(
+            `The server took longer than ${Math.round(timeoutMs / 1000)} s to respond. Try a smaller worksheet or reconnect to a stronger network.`,
+          );
+        }
+        if (retryErr instanceof TypeError) {
+          throw new Error(
+            "Couldn't reach the server. Check your internet connection and try again.",
+          );
+        }
+        throw retryErr;
+      }
+    }
+    throw err;
+  }
+}
+
+export default function WorksheetGenerator({ initialSubjects, initialTopics }: WorksheetGeneratorProps) {
+  // Subject and topic states — pre-populated from server, no loading needed
+  const [subjects] = useState<Subject[]>(initialSubjects);
+  const [topics, setTopics] = useState<Topic[]>(initialTopics);
+  const [loadingTopics, setLoadingTopics] = useState(false);
+  
+  const [selectedSubject, setSelectedSubject] = useState<string>(initialSubjects[0]?.id || '');
+  const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
+  const [yearStart, setYearStart] = useState<number>(START_YEAR);
+  const [yearEnd, setYearEnd] = useState<number>(CURRENT_YEAR);
+  const [difficulty, setDifficulty] = useState<string>('');
+  // Kept as the raw text so the field can be emptied while typing; the count
+  // actually requested is always derived (and clamped) from it.
+  const [limitDraft, setLimitDraft] = useState<string>(String(DEFAULT_QUESTION_COUNT));
+  const { limit: questionLimit } = useQuestionLimit();
+  // Admins, teachers and Pro students have no limit; the input still needs a ceiling.
+  const inputMax = questionLimit ?? 500;
+  const limit = parseQuestionCount(limitDraft, inputMax, DEFAULT_QUESTION_COUNT);
+  const [shuffle, setShuffle] = useState<boolean>(false);
+  
+  const [loading, setLoading] = useState(false);
+  const [pdfProgress, setPdfProgress] = useState<{ step: number; total: number; label: string } | null>(null);
+  const [worksheetId, setWorksheetId] = useState<string | null>(null);
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [needsSignIn, setNeedsSignIn] = useState(false);
+
+  const [worksheetUrl, setWorksheetUrl] = useState<string | null>(null);
+  const [markschemeUrl, setMarkschemeUrl] = useState<string | null>(null);
+  // Blobs are retained next to their object URLs: iOS saves through the Web
+  // Share API, which needs a File handed over synchronously inside the click,
+  // so re-reading the object URL at that point would be too late.
+  const [worksheetBlob, setWorksheetBlob] = useState<Blob | null>(null);
+  const [markschemeBlob, setMarkschemeBlob] = useState<Blob | null>(null);
+
+  // Cache topics per subject to avoid re-fetching
+  const topicsCache = useRef<Record<string, Topic[]>>({
+    [initialSubjects[0]?.id || '']: initialTopics,
+  });
+
+  // Fetch topics only when subject changes (with cache)
+  useEffect(() => {
+    if (!selectedSubject) return;
+    
+    // Return cached topics if available
+    if (topicsCache.current[selectedSubject]) {
+      setTopics(topicsCache.current[selectedSubject]);
+      return;
+    }
+
+    async function fetchTopics() {
+      setLoadingTopics(true);
+      try {
+        const response = await fetch(`/api/topics?subjectId=${selectedSubject}`);
+        const data = await response.json();
+        if (Array.isArray(data)) {
+          topicsCache.current[selectedSubject] = data;
+          setTopics(data);
+        } else {
+          setTopics([]);
+        }
+      } catch {
+        setTopics([]);
+      } finally {
+        setLoadingTopics(false);
+      }
+    }
+    fetchTopics();
+  }, [selectedSubject]);
+
+  // Reset selected topics when subject changes — revoke any live object URLs
+  useEffect(() => {
+    setSelectedTopics([]);
+    setQuestions([]);
+    setWorksheetId(null);
+    setWorksheetUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
+    setMarkschemeUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
+    setWorksheetBlob(null);
+    setMarkschemeBlob(null);
+    setError(null);
+  }, [selectedSubject]);
+
+  // Note: we deliberately do NOT auto-open a PDF iframe on mobile.
+  // iOS Safari can't render PDF blob URLs inside iframes — it shows a
+  // broken-page icon. Previews are rasterised by MultiPagePdfPreview, and
+  // the download anchors below fall back to the iOS share sheet — see
+  // @/lib/savePdf for why the `download` attribute alone isn't enough.
+
+  const toggleTopic = (code: string) => {
+    setSelectedTopics(prev =>
+      prev.includes(code)
+        ? prev.filter(c => c !== code)
+        : [...prev, code]
+    );
+  };
+
+  const handleGenerate = async () => {
+    if (selectedTopics.length === 0) {
+      setError('Please select at least one topic');
+      return;
+    }
+    if (yearStart > yearEnd) {
+      setError('Start year cannot be after end year');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setNeedsSignIn(false);
+    setWorksheetId(null);
+    setQuestions([]);
+
+    // Revoke any existing object URLs before creating new ones
+    setWorksheetUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
+    setMarkschemeUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
+    setWorksheetBlob(null);
+    setMarkschemeBlob(null);
+
+    try {
+      const response = await fetchWithRetry('/api/worksheets/generate-v2', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subjectId: selectedSubject,
+          topics: selectedTopics,
+          yearStart,
+          yearEnd,
+          difficulty: difficulty || undefined,
+          limit,
+          shuffle,
+        }),
+      });
+
+      if (response.status === 401) {
+        setNeedsSignIn(true);
+        return;
+      }
+
+      if (!response.ok) {
+        const text = await response.text();
+        let serverMessage = text;
+        try {
+          serverMessage = JSON.parse(text)?.error ?? text;
+        } catch {
+          // Non-JSON error body (e.g., HTML 504 page) — keep raw text.
+        }
+        throw new Error(
+          `Server returned ${response.status}: ${serverMessage || response.statusText}`,
+        );
+      }
+
+      const data = await response.json();
+
+      if (!data.pages || data.pages.length === 0) {
+        setError('No questions found matching your criteria. Try different filters.');
+        return;
+      }
+
+      setWorksheetId(data.worksheet_id);
+      setQuestions(data.pages);
+    } catch (err: unknown) {
+      console.error('[WorksheetGenerator] generate failed', err);
+      setError(err instanceof Error ? err.message : 'Failed to generate worksheet');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDownload = async () => {
+    if (!worksheetId || questions.length === 0) return;
+
+    setError(null);
+    setWorksheetUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
+    setMarkschemeUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
+    setWorksheetBlob(null);
+    setMarkschemeBlob(null);
+
+    const subject = subjects.find(s => s.id === selectedSubject);
+    const subjectName = subject?.name ?? '';
+    const subjectLevel = subject?.level ?? '';
+
+    // Map the questions returned by /generate-v2 onto the shape the
+    // browser-side merger expects.
+    // The metadata is printed on each question's first page, so a question
+    // and its mark scheme can always be matched by eye.
+    const pagesPayload = questions.map((q) => ({
+      qpPageUrl: q.qpPageUrl,
+      msPageUrl: q.msPageUrl,
+      questionNumber: q.questionNumber,
+      year: q.year,
+      season: q.season,
+      paper: q.paper,
+    }));
+
+    try {
+      // Step 1: Build worksheet PDF in the browser (no server round-trip
+      // for the merge — see src/lib/clientPdfBuild.ts).
+      const wsResult = await buildPdfInBrowser(pagesPayload, {
+        kind: 'worksheet',
+        title: `${subjectName || 'Worksheet'} Worksheet`,
+        subjectName,
+        level: subjectLevel,
+        totalMarks: questions.length * 4,
+        brand: 'GradeMax Worksheets',
+        topics: selectedTopics,
+        yearStart,
+        yearEnd,
+        difficulty: difficulty || null,
+      }, (p) => {
+        setPdfProgress({
+          step: 1,
+          total: 2,
+          label: `Worksheet · ${p.label}`,
+        });
+      });
+
+      if (wsResult.successCount === 0) {
+        throw new Error('No question PDFs could be downloaded. Please try again or check your connection.');
+      }
+
+      setWorksheetBlob(wsResult.blob);
+      setWorksheetUrl(URL.createObjectURL(wsResult.blob));
+
+      // Step 2: Markscheme — best effort.
+      try {
+        const hasAnyMs = pagesPayload.some((p) => p.msPageUrl);
+        if (hasAnyMs) {
+          const msResult = await buildPdfInBrowser(pagesPayload, {
+            kind: 'markscheme',
+            title: `${subjectName || 'Worksheet'} Worksheet`,
+            subjectName,
+            level: subjectLevel,
+            totalMarks: questions.length * 4,
+            brand: 'GradeMax Worksheets',
+            topics: selectedTopics,
+            yearStart,
+            yearEnd,
+            difficulty: difficulty || null,
+          }, (p) => {
+            setPdfProgress({
+              step: 2,
+              total: 2,
+              label: `Markscheme · ${p.label}`,
+            });
+          });
+          if (msResult.successCount > 0) {
+            setMarkschemeBlob(msResult.blob);
+            setMarkschemeUrl(URL.createObjectURL(msResult.blob));
+          }
+        }
+      } catch (msErr) {
+        console.warn('[WorksheetGenerator] markscheme build failed', msErr);
+      }
+
+      setPdfProgress({ step: 2, total: 2, label: 'PDFs ready!' });
+      setTimeout(() => setPdfProgress(null), 2000);
+
+      fireTrack("worksheet_download", {
+        subject_id: selectedSubject,
+        subject_name: subject?.name ?? null,
+        metadata: { worksheet_id: worksheetId },
+      });
+    } catch (err: unknown) {
+      console.error('[WorksheetGenerator] download failed', err);
+      setError(err instanceof Error ? err.message : 'Failed to generate PDFs');
+      setPdfProgress(null);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-900 p-4 md:p-8">
+      <div className="max-w-7xl mx-auto">
+        <h1 className="text-2xl md:text-5xl font-bold mb-2 text-white">Worksheet Generator</h1>
+        <p className="text-gray-300 mb-4 md:mb-8 text-sm md:text-base">
+          Select subject, topics, year range, and difficulty to create custom worksheets
+        </p>
+
+        {/* Filters Panel */}
+        <div className="bg-gray-800 bg-opacity-80 backdrop-blur-lg rounded-xl md:rounded-2xl shadow-xl p-4 md:p-8 mb-4 md:mb-8 border border-gray-700">
+          
+          {/* Subject Selection */}
+          <div className="mb-4 md:mb-8">
+            <h2 className="text-lg md:text-2xl font-semibold mb-3 md:mb-4 flex items-center gap-2 text-white">
+              Select Subject
+            </h2>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-5 gap-2 md:gap-4">
+              {subjects.length === 0 ? (
+                <div className="col-span-full text-center py-4 md:py-8 text-gray-400">
+                  <p className="text-base md:text-lg mb-2">No subjects available</p>
+                  <p className="text-xs md:text-sm">Please contact the administrator</p>
+                </div>
+              ) : (
+                subjects.map((subject) => (
+                  <button
+                    key={subject.id}
+                    onClick={() => setSelectedSubject(subject.id)}
+                    className={`p-2 md:p-4 rounded-lg md:rounded-xl border-2 transition-all ${
+                      selectedSubject === subject.id
+                        ? 'border-amber-500 bg-amber-900 bg-opacity-50 shadow-lg'
+                        : 'border-gray-600 bg-gray-700 bg-opacity-50 hover:border-gray-500'
+                    }`}
+                  >
+                    <div className="text-[10px] md:text-xs text-gray-400 font-medium mb-0.5 md:mb-1">{subject.code}</div>
+                    <div className="text-[10px] md:text-xs text-gray-400 font-medium">{subject.level || 'IGCSE'}</div>
+                    <div className="text-xs md:text-sm font-semibold text-white text-center">{subject.name}</div>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Topic Selection */}
+          <div className="mb-4 md:mb-8">
+            <h2 className="text-lg md:text-2xl font-semibold mb-3 md:mb-4 flex flex-wrap items-center gap-2 text-white">
+              Select Topics
+              {selectedTopics.length > 0 && (
+                <span className="text-xs md:text-sm bg-blue-500 text-white px-2 md:px-3 py-0.5 md:py-1 rounded-full">
+                  {selectedTopics.length} selected
+                </span>
+              )}
+            </h2>
+            
+            {loadingTopics ? (
+              <div className="flex items-center justify-center p-4 md:p-8">
+                <div className="animate-spin rounded-full h-6 w-6 md:h-8 md:w-8 border-b-2 border-white"></div>
+              </div>
+            ) : topics.length === 0 ? (
+              <div className="text-center p-4 md:p-8 bg-gray-700 bg-opacity-30 rounded-xl">
+                <p className="text-gray-400 text-sm md:text-base">No topics available for this subject yet</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto -mx-4 md:mx-0">
+                <table className="w-full border-collapse min-w-[300px]">
+                  <thead>
+                    <tr className="bg-gray-700 bg-opacity-50">
+                      <th className="border border-gray-600 px-2 md:px-4 py-2 md:py-3 text-left text-white font-semibold text-xs md:text-base">Select</th>
+                      <th className="border border-gray-600 px-2 md:px-4 py-2 md:py-3 text-left text-white font-semibold text-xs md:text-base">Code</th>
+                      <th className="border border-gray-600 px-2 md:px-4 py-2 md:py-3 text-left text-white font-semibold text-xs md:text-base">Topic Name</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {topics.map((topic) => (
+                      <tr 
+                        key={topic.id}
+                        onClick={() => toggleTopic(topic.code)}
+                        className={`transition-colors cursor-pointer ${
+                          selectedTopics.includes(topic.code)
+                            ? 'bg-blue-900 bg-opacity-50 border-blue-500'
+                            : 'bg-gray-700 bg-opacity-30 hover:bg-gray-600 hover:bg-opacity-40'
+                        }`}
+                      >
+                        <td className="border border-gray-600 px-2 md:px-4 py-2 md:py-3 text-center">
+                          <div 
+                            className="relative flex items-center justify-center w-10 h-10 md:w-12 md:h-12 cursor-pointer mx-auto"
+                            onClick={(e) => { e.stopPropagation(); toggleTopic(topic.code); }}
+                          >
+                            <div className={`w-7 h-7 md:w-8 md:h-8 rounded-lg border-2 transition-all flex items-center justify-center ${
+                              selectedTopics.includes(topic.code) 
+                                ? 'bg-blue-600 border-blue-400' 
+                                : 'bg-gray-600 border-gray-500 hover:border-gray-400'
+                            }`}>
+                              {selectedTopics.includes(topic.code) && (
+                                <svg className="w-5 h-5 md:w-6 md:h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" />
+                                </svg>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="border border-gray-600 px-2 md:px-4 py-2 md:py-3">
+                          <span className="text-white font-semibold text-xs md:text-base">{topic.code}</span>
+                        </td>
+                        <td className="border border-gray-600 px-2 md:px-4 py-2 md:py-3">
+                          <span className="text-white text-xs md:text-base">{topic.name}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Year Range */}
+          <div className="grid grid-cols-2 gap-3 md:gap-6 mb-4 md:mb-8">
+            <div>
+              <label className="block text-xs md:text-sm font-semibold text-gray-300 mb-1 md:mb-2">
+                Start Year
+              </label>
+              <select
+                value={yearStart}
+                onChange={(e) => setYearStart(parseInt(e.target.value))}
+                className="w-full p-2 md:p-3 border-2 border-gray-600 bg-gray-700 text-white rounded-lg focus:border-blue-500 focus:outline-none text-base"
+              >
+                {YEARS.map((year) => (
+                  <option key={year} value={year}>{year}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs md:text-sm font-semibold text-gray-300 mb-1 md:mb-2">
+                End Year
+              </label>
+              <select
+                value={yearEnd}
+                onChange={(e) => setYearEnd(parseInt(e.target.value))}
+                className="w-full p-2 md:p-3 border-2 border-gray-600 bg-gray-700 text-white rounded-lg focus:border-blue-500 focus:outline-none text-base"
+              >
+                {YEARS.map((year) => (
+                  <option key={year} value={year}>{year}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Additional Filters */}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-6 mb-4 md:mb-8">
+            <div>
+              <label className="block text-xs md:text-sm font-semibold text-gray-300 mb-1 md:mb-2">
+                Difficulty
+              </label>
+              <select
+                value={difficulty}
+                onChange={(e) => setDifficulty(e.target.value)}
+                className="w-full p-2 md:p-3 border-2 border-gray-600 bg-gray-700 text-white rounded-lg focus:border-blue-500 focus:outline-none text-base"
+              >
+                <option value="">All</option>
+                <option value="easy">Easy</option>
+                <option value="medium">Medium</option>
+                <option value="hard">Hard</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs md:text-sm font-semibold text-gray-300 mb-1 md:mb-2">
+                {questionLimit === null ? 'Max Questions' : `Max Questions (up to ${questionLimit})`}
+              </label>
+              <input
+                type="number"
+                inputMode="numeric"
+                value={limitDraft}
+                onChange={(e) => setLimitDraft(e.target.value)}
+                onBlur={() => setLimitDraft(String(limit))}
+                min="1"
+                max={inputMax}
+                className="w-full p-2 md:p-3 border-2 border-gray-600 bg-gray-700 text-white rounded-lg focus:border-blue-500 focus:outline-none text-base"
+              />
+            </div>
+            <div className="col-span-2 md:col-span-1 flex items-end">
+              <label className="flex items-center gap-2 cursor-pointer p-2 md:p-3 border-2 border-gray-600 bg-gray-700 rounded-lg hover:border-blue-500 w-full">
+                <input
+                  type="checkbox"
+                  checked={shuffle}
+                  onChange={(e) => setShuffle(e.target.checked)}
+                  className="w-4 h-4 md:w-5 md:h-5"
+                />
+                <span className="text-xs md:text-sm font-semibold text-white">Shuffle Questions</span>
+              </label>
+            </div>
+          </div>
+
+          {/* Generate Button */}
+          <button
+            onClick={handleGenerate}
+            disabled={loading || selectedTopics.length === 0}
+            className="w-full bg-gradient-to-r from-amber-500 to-yellow-400 text-gray-900 py-3 md:py-4 rounded-xl font-bold text-base md:text-lg shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? 'Generating...' : 'Generate Worksheet'}
+          </button>
+        </div>
+
+        {/* Error Display */}
+        {needsSignIn && (
+          <SignInPrompt title="Sign in to make practice worksheets" next="/generate" />
+        )}
+
+        {error && (
+          <div className="bg-red-900 bg-opacity-80 backdrop-blur-lg border-2 border-red-500 rounded-xl p-4 md:p-6 mb-4 md:mb-8">
+            <div className="flex items-center gap-3">
+              <div>
+                <div className="font-bold text-red-300 text-sm md:text-base">Error</div>
+                <div className="text-red-200 text-sm md:text-base">{error}</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Results */}
+        {questions.length > 0 && (
+          <div className="bg-gray-800 bg-opacity-80 backdrop-blur-lg rounded-xl md:rounded-2xl shadow-xl p-4 md:p-8 border border-gray-700">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4 md:mb-6">
+              <div>
+                <h2 className="text-lg md:text-2xl font-bold text-white">
+                  Generated Worksheet
+                </h2>
+                <p className="text-gray-300 text-xs md:text-base">
+                  {questions.length} questions • {selectedTopics.join(', ')}
+                </p>
+              </div>
+              
+              <button
+                onClick={handleDownload}
+                disabled={pdfProgress !== null}
+                className="w-full sm:w-auto bg-green-500 text-white px-4 md:px-6 py-2 md:py-3 rounded-lg font-semibold hover:bg-green-600 transition-colors disabled:opacity-50 text-sm md:text-base"
+              >
+                {pdfProgress ? pdfProgress.label : 'Download PDFs'}
+              </button>
+            </div>
+
+            {/* PDF Progress Bar */}
+            {pdfProgress && (
+              <div className="bg-gray-900 border border-gray-600 rounded-xl p-4 md:p-6 mb-4 md:mb-6">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-sm font-semibold text-white">{pdfProgress.label}</span>
+                  <span className="text-xs text-gray-400">Step {pdfProgress.step} of {pdfProgress.total}</span>
+                </div>
+                <div className="w-full h-3 bg-gray-700 rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full transition-all duration-500 ease-out"
+                    style={{
+                      width: `${Math.round((pdfProgress.step / pdfProgress.total) * 100)}%`,
+                      background: pdfProgress.step === pdfProgress.total
+                        ? 'linear-gradient(to right, #22c55e, #10b981)'
+                        : 'linear-gradient(to right, #3b82f6, #6366f1)',
+                    }}
+                  />
+                </div>
+                <div className="flex justify-between mt-3 gap-1">
+                  {['Worksheet PDF', 'Markscheme PDF', 'Complete'].map((stepLabel, i) => (
+                    <div key={stepLabel} className="flex items-center gap-1.5 text-xs">
+                      <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                        i + 1 < pdfProgress.step
+                          ? 'bg-green-400'
+                          : i + 1 === pdfProgress.step
+                          ? 'bg-blue-400 animate-pulse'
+                          : 'bg-gray-600'
+                      }`} />
+                      <span className={
+                        i + 1 < pdfProgress.step
+                          ? 'text-green-400'
+                          : i + 1 === pdfProgress.step
+                          ? 'text-blue-300'
+                          : 'text-gray-500'
+                      }>{stepLabel}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Download Links */}
+            {(worksheetUrl || markschemeUrl) && (
+              <div className="bg-gradient-to-r from-green-900 to-emerald-900 bg-opacity-50 border-2 border-green-500 rounded-xl p-4 md:p-6 mb-4 md:mb-6">
+                <h3 className="font-bold text-green-300 mb-3 md:mb-4 text-base md:text-lg">PDFs Ready!</h3>
+                <div className="flex flex-col sm:flex-row gap-3 md:gap-4 mb-4 md:mb-6">
+                  {worksheetUrl && (
+                    <a
+                      href={worksheetUrl}
+                      download="worksheet.pdf"
+                      onClick={(e) => handlePdfDownloadClick(e, worksheetBlob, 'worksheet.pdf', worksheetUrl)}
+                      className="flex-1 bg-gray-700 border-2 border-green-500 text-green-300 px-4 md:px-6 py-2 md:py-3 rounded-lg font-semibold hover:bg-green-900 transition-colors text-center text-sm md:text-base"
+                    >
+                      Download Worksheet.pdf
+                    </a>
+                  )}
+                  {markschemeUrl && (
+                    <a
+                      href={markschemeUrl}
+                      download="markscheme.pdf"
+                      onClick={(e) => handlePdfDownloadClick(e, markschemeBlob, 'markscheme.pdf', markschemeUrl)}
+                      className="flex-1 bg-gray-700 border-2 border-blue-500 text-blue-300 px-4 md:px-6 py-2 md:py-3 rounded-lg font-semibold hover:bg-blue-900 transition-colors text-center text-sm md:text-base"
+                    >
+                      Download Markscheme.pdf
+                    </a>
+                  )}
+                </div>
+
+                {/* PDF Previews — canvas-based, works on iOS where PDF
+                    iframes render as a broken-page icon. Visible on all
+                    screen sizes; on phones the canvases are sized to the
+                    container and rendered sequentially to bound memory. */}
+                {worksheetUrl && (
+                  <div className="w-full flex flex-col mb-6">
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="text-green-300 font-semibold text-base md:text-xl">Worksheet Preview</h4>
+                      <a
+                        href={worksheetUrl}
+                        target="_blank"
+                        rel="noopener"
+                        onClick={(e) => handlePdfPreviewClick(e, worksheetUrl)}
+                        className="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 md:px-4 md:py-2 rounded-lg font-semibold text-xs md:text-sm transition-colors"
+                      >
+                        Open in viewer
+                      </a>
+                    </div>
+                    <MultiPagePdfPreview url={worksheetUrl} blob={worksheetBlob} className="border-2 border-green-500/60 max-h-[70vh] overflow-y-auto" />
+                  </div>
+                )}
+                {markschemeUrl && (
+                  <div className="w-full flex flex-col">
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="text-blue-300 font-semibold text-base md:text-xl">Markscheme Preview</h4>
+                      <a
+                        href={markschemeUrl}
+                        target="_blank"
+                        rel="noopener"
+                        onClick={(e) => handlePdfPreviewClick(e, markschemeUrl)}
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 md:px-4 md:py-2 rounded-lg font-semibold text-xs md:text-sm transition-colors"
+                      >
+                        Open in viewer
+                      </a>
+                    </div>
+                    <MultiPagePdfPreview url={markschemeUrl} blob={markschemeBlob} className="border-2 border-blue-500/60 max-h-[70vh] overflow-y-auto" />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Question List */}
+            <div className="space-y-2 md:space-y-3">
+              {questions.map((q, index) => (
+                <div
+                  key={q.id}
+                  className="border-2 border-gray-600 bg-gray-700 bg-opacity-50 rounded-lg p-3 md:p-4 hover:border-blue-500 transition-colors"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-3 md:gap-4">
+                      <div className="bg-blue-500 text-white w-8 h-8 md:w-10 md:h-10 rounded-full flex items-center justify-center font-bold text-sm md:text-base flex-shrink-0">
+                        {index + 1}
+                      </div>
+                      <div>
+                        <div className="font-semibold text-white text-sm md:text-base">
+                          Question {q.questionNumber}
+                        </div>
+                        <div className="text-xs md:text-sm text-gray-300">
+                          {q.year} {q.season} • Paper {q.paper}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5 md:gap-2 ml-11 sm:ml-0">
+                      {q.topics.map((topic: string) => (
+                        <span
+                          key={topic}
+                          className="px-2 md:px-3 py-0.5 md:py-1 bg-blue-900 text-blue-300 border border-blue-500 rounded-full text-xs md:text-sm font-medium"
+                        >
+                          {topic}
+                        </span>
+                      ))}
+                      {q.difficulty && (
+                        <span className={`px-2 md:px-3 py-0.5 md:py-1 rounded-full text-xs md:text-sm font-medium border ${
+                          q.difficulty === 'easy' ? 'bg-green-900 text-green-300 border-green-500' :
+                          q.difficulty === 'medium' ? 'bg-yellow-900 text-yellow-300 border-yellow-500' :
+                          'bg-red-900 text-red-300 border-red-500'
+                        }`}>
+                          {q.difficulty}
+                        </span>
+                      )}
+                      {q.hasDiagram && (
+                        <span className="px-2 md:px-3 py-0.5 md:py-1 bg-amber-900 text-amber-300 border border-amber-500 rounded-full text-xs md:text-sm">
+                          Diagram
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
